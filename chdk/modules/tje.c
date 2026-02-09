@@ -11,6 +11,20 @@
 extern void *memcpy(void *dest, const void *src, long n);
 extern void *memset(void *s, int c, long n);
 
+// Fast bit-length: number of bits needed to represent val (0 returns 0).
+// Uses binary search — 5 comparisons vs up to 11 iterations in a while loop.
+static inline int bit_length(unsigned int val)
+{
+    int n = 0;
+    if (val >= (1u << 16)) { n += 16; val >>= 16; }
+    if (val >= (1u <<  8)) { n +=  8; val >>=  8; }
+    if (val >= (1u <<  4)) { n +=  4; val >>=  4; }
+    if (val >= (1u <<  2)) { n +=  2; val >>=  2; }
+    if (val >= (1u <<  1)) { n +=  1; val >>=  1; }
+    n += val;
+    return n;
+}
+
 // ============================================================
 // JPEG constants
 // ============================================================
@@ -157,6 +171,10 @@ typedef struct {
     unsigned char  lum_quant[64];
     unsigned char  chrom_quant[64];
 
+    // Reciprocal tables for fast division: recip[i] = (1 << 16) / quant[i]
+    unsigned short lum_recip[64];
+    unsigned short chrom_recip[64];
+
     // Huffman tables
     huff_table_t   dc_lum_ht;
     huff_table_t   ac_lum_ht;
@@ -168,7 +186,7 @@ typedef struct {
 // Bit output
 // ============================================================
 
-static void tje_write_byte(tje_state_t *s, unsigned char b)
+static inline void tje_write_byte(tje_state_t *s, unsigned char b)
 {
     if (s->pos < s->buf_len) {
         s->buf[s->pos++] = b;
@@ -183,13 +201,13 @@ static void tje_write_bytes(tje_state_t *s, const unsigned char *data, int len)
     }
 }
 
-static void tje_write_word(tje_state_t *s, unsigned short w)
+static inline void tje_write_word(tje_state_t *s, unsigned short w)
 {
     tje_write_byte(s, (unsigned char)(w >> 8));
     tje_write_byte(s, (unsigned char)(w & 0xFF));
 }
 
-static void tje_flush_bits(tje_state_t *s)
+static inline void tje_flush_bits(tje_state_t *s)
 {
     while (s->bitcount >= 8) {
         unsigned char b = (unsigned char)(s->bitbuf >> (s->bitcount - 8));
@@ -201,7 +219,7 @@ static void tje_flush_bits(tje_state_t *s)
     }
 }
 
-static void tje_put_bits(tje_state_t *s, unsigned int bits, int nbits)
+static inline void tje_put_bits(tje_state_t *s, unsigned int bits, int nbits)
 {
     s->bitbuf = (s->bitbuf << nbits) | (bits & ((1u << nbits) - 1));
     s->bitcount += nbits;
@@ -237,7 +255,7 @@ static void build_huffman_table(huff_table_t *ht, const unsigned char *bits, con
 // Quantization table generation
 // ============================================================
 
-static void make_quant_table(unsigned char *dst, const unsigned char *src, int quality)
+static void make_quant_table(unsigned char *dst, unsigned short *recip, const unsigned char *src, int quality)
 {
     int i;
     int scale;
@@ -256,6 +274,7 @@ static void make_quant_table(unsigned char *dst, const unsigned char *src, int q
         if (val < 1) val = 1;
         if (val > 255) val = 255;
         dst[i] = (unsigned char)val;
+        recip[i] = (unsigned short)(65536u / (unsigned)val);
     }
 }
 
@@ -394,6 +413,7 @@ static void fdct_int(int *block)
 // ============================================================
 
 static void encode_block(tje_state_t *s, int *block, const unsigned char *quant,
+                         const unsigned short *recip,
                          huff_table_t *dc_ht, huff_table_t *ac_ht, int *last_dc)
 {
     int i;
@@ -401,15 +421,16 @@ static void encode_block(tje_state_t *s, int *block, const unsigned char *quant,
     int nbits;
     int zz_block[64];
 
-    // Quantize
+    // Quantize using reciprocal multiplication instead of division
     for (i = 0; i < 64; i++) {
         int q = quant[i];
         int val = block[i];
-        // Round to nearest with bias toward zero
+        unsigned int r = recip[i];
+        // Round to nearest with bias toward zero, then multiply by reciprocal
         if (val >= 0) {
-            val = (val + (q >> 1)) / q;
+            val = (int)(((unsigned int)(val + (q >> 1)) * r) >> 16);
         } else {
-            val = (val - (q >> 1)) / q;
+            val = -(int)(((unsigned int)(-val + (q >> 1)) * r) >> 16);
         }
         zz_block[zz_order[i]] = val;
     }
@@ -422,11 +443,7 @@ static void encode_block(tje_state_t *s, int *block, const unsigned char *quant,
         temp = -temp;
         temp2--;
     }
-    nbits = 0;
-    while (temp) {
-        nbits++;
-        temp >>= 1;
-    }
+    nbits = bit_length((unsigned int)temp);
 
     tje_put_bits(s, dc_ht->code[nbits], dc_ht->len[nbits]);
     if (nbits) {
@@ -452,14 +469,7 @@ static void encode_block(tje_state_t *s, int *block, const unsigned char *quant,
                 temp = -temp;
                 temp2--;
             }
-            nbits = 0;
-            {
-                int t = temp;
-                while (t) {
-                    nbits++;
-                    t >>= 1;
-                }
-            }
+            nbits = bit_length((unsigned int)temp);
             {
                 int code_idx = (run << 4) | nbits;
                 tje_put_bits(s, ac_ht->code[code_idx], ac_ht->len[code_idx]);
@@ -501,17 +511,12 @@ static void write_jpeg_header(tje_state_t *s, int width, int height)
     tje_write_byte(s, 0);           // no thumbnail
     tje_write_byte(s, 0);
 
-    // DQT (luminance) - write in zig-zag order per JPEG spec.
-    // For each zig-zag position i, find the natural index that maps to it.
+    // DQT (luminance) - write in zig-zag order per JPEG spec using zz_inv lookup
     tje_write_word(s, 0xFFDB);
     tje_write_word(s, 67);          // length = 2 + 1 + 64
     tje_write_byte(s, 0);           // table 0, 8-bit precision
     for (i = 0; i < 64; i++) {
-        int nat;
-        for (nat = 0; nat < 64; nat++) {
-            if (zz_order[nat] == (unsigned char)i) break;
-        }
-        tje_write_byte(s, s->lum_quant[nat]);
+        tje_write_byte(s, s->lum_quant[zz_inv[i]]);
     }
 
     // DQT (chrominance)
@@ -519,11 +524,7 @@ static void write_jpeg_header(tje_state_t *s, int width, int height)
     tje_write_word(s, 67);
     tje_write_byte(s, 1);           // table 1
     for (i = 0; i < 64; i++) {
-        int nat;
-        for (nat = 0; nat < 64; nat++) {
-            if (zz_order[nat] == (unsigned char)i) break;
-        }
-        tje_write_byte(s, s->chrom_quant[nat]);
+        tje_write_byte(s, s->chrom_quant[zz_inv[i]]);
     }
 
     // SOF0 (Baseline DCT, YCbCr 4:2:2)
@@ -593,6 +594,9 @@ static void write_jpeg_header(tje_state_t *s, int width, int height)
 // YUV411 (UYVYYY) encoder - native CHDK Digic IV format
 // ============================================================
 
+// Y offset within 6-byte UYVYYY group: pixel 0->1, 1->3, 2->4, 3->5
+static const unsigned char y_offsets[4] = {1, 3, 4, 5};
+
 // Extract an 8x8 Y block from UYVYYY data
 // px, py: block position in pixels
 static void extract_y_block_yuv411(int *block, const unsigned char *yuv_data,
@@ -608,20 +612,10 @@ static void extract_y_block_yuv411(int *block, const unsigned char *yuv_data,
             int x = px + c;
             if (x >= img_width) x = img_width - 1;
             // In UYVYYY: each group of 4 pixels = 6 bytes
-            // Byte layout: U Y0 V Y1 Y2 Y3
-            // Pixel x maps to group (x/4), Y index within group is (x%4)
-            int group = x / 4;
-            int idx = x % 4;
-            int base = group * 6;
-            // Y values are at offsets 1, 3, 4, 5 within the 6-byte group
-            unsigned char yval;
-            switch (idx) {
-                case 0: yval = row[base + 1]; break;
-                case 1: yval = row[base + 3]; break;
-                case 2: yval = row[base + 4]; break;
-                default: yval = row[base + 5]; break;
-            }
-            block[r * 8 + c] = (int)yval - 128;
+            // group = x/4, sub-pixel index = x%4
+            int group = x >> 2;
+            int base = (group << 2) + (group << 1); // group * 6
+            block[r * 8 + c] = (int)row[base + y_offsets[x & 3]] - 128;
         }
     }
 }
@@ -644,8 +638,8 @@ static void extract_chroma_block_yuv411(int *block, const unsigned char *yuv_dat
             int x = px + c * 2;
             if (x >= img_width) x = img_width - 2;
             if (x < 0) x = 0;
-            int group = x / 4;
-            int base = group * 6;
+            int group = x >> 2;
+            int base = (group << 2) + (group << 1); // group * 6
             // U (Cb) at offset 0, V (Cr) at offset 2 in each 6-byte group
             // Viewport stores chroma as SIGNED bytes centered at 0,
             // not unsigned centered at 128. Cast to signed char directly.
@@ -683,9 +677,9 @@ int tje_encode_yuv411(
     state.bitbuf = 0;
     state.bitcount = 0;
 
-    // Build quantization tables (natural order for encoding)
-    make_quant_table(state.lum_quant, std_lum_quant, quality);
-    make_quant_table(state.chrom_quant, std_chrom_quant, quality);
+    // Build quantization tables (natural order for encoding) + reciprocals
+    make_quant_table(state.lum_quant, state.lum_recip, std_lum_quant, quality);
+    make_quant_table(state.chrom_quant, state.chrom_recip, std_chrom_quant, quality);
 
     // Build Huffman tables
     build_huffman_table(&state.dc_lum_ht, dc_lum_bits, dc_lum_val);
@@ -708,27 +702,27 @@ int tje_encode_yuv411(
             // Y block 0 (left 8 pixels)
             extract_y_block_yuv411(block, yuv_data, yuv_stride, px, py, width, height);
             fdct_int(block);
-            encode_block(&state, block, state.lum_quant,
+            encode_block(&state, block, state.lum_quant, state.lum_recip,
                         &state.dc_lum_ht, &state.ac_lum_ht, &dc_y);
 
             // Y block 1 (right 8 pixels)
             extract_y_block_yuv411(block, yuv_data, yuv_stride, px + 8, py, width, height);
             fdct_int(block);
-            encode_block(&state, block, state.lum_quant,
+            encode_block(&state, block, state.lum_quant, state.lum_recip,
                         &state.dc_lum_ht, &state.ac_lum_ht, &dc_y);
 
             // Cb block (subsampled)
             extract_chroma_block_yuv411(block, yuv_data, yuv_stride, px, py,
                                         width, height, 0);
             fdct_int(block);
-            encode_block(&state, block, state.chrom_quant,
+            encode_block(&state, block, state.chrom_quant, state.chrom_recip,
                         &state.dc_chrom_ht, &state.ac_chrom_ht, &dc_cb);
 
             // Cr block (subsampled)
             extract_chroma_block_yuv411(block, yuv_data, yuv_stride, px, py,
                                         width, height, 1);
             fdct_int(block);
-            encode_block(&state, block, state.chrom_quant,
+            encode_block(&state, block, state.chrom_quant, state.chrom_recip,
                         &state.dc_chrom_ht, &state.ac_chrom_ht, &dc_cr);
         }
     }
@@ -744,128 +738,3 @@ int tje_encode_yuv411(
     return state.pos;
 }
 
-// ============================================================
-// YUV422 (UYVY) encoder
-// ============================================================
-
-static void extract_y_block_uyvy(int *block, const unsigned char *yuv_data,
-                                  int yuv_stride, int px, int py,
-                                  int img_width, int img_height)
-{
-    int r, c;
-    for (r = 0; r < 8; r++) {
-        int y = py + r;
-        if (y >= img_height) y = img_height - 1;
-        const unsigned char *row = yuv_data + y * yuv_stride;
-        for (c = 0; c < 8; c++) {
-            int x = px + c;
-            if (x >= img_width) x = img_width - 1;
-            // UYVY: U0 Y0 V0 Y1 U2 Y2 V2 Y3 ...
-            // Y at odd byte positions: offset = x*2 + 1
-            block[r * 8 + c] = (int)row[x * 2 + 1] - 128;
-        }
-    }
-}
-
-static void extract_chroma_block_uyvy(int *block, const unsigned char *yuv_data,
-                                       int yuv_stride, int px, int py,
-                                       int img_width, int img_height,
-                                       int is_cr)
-{
-    int r, c;
-    for (r = 0; r < 8; r++) {
-        int y = py + r;
-        if (y >= img_height) y = img_height - 1;
-        const unsigned char *row = yuv_data + y * yuv_stride;
-        for (c = 0; c < 8; c++) {
-            int x = px + c * 2;
-            if (x >= img_width) x = img_width - 2;
-            if (x < 0) x = 0;
-            // UYVY: U at x*2, V at x*2+2 (for even x)
-            int base = (x / 2) * 4;
-            unsigned char val;
-            if (is_cr) {
-                val = row[base + 2]; // V
-            } else {
-                val = row[base + 0]; // U
-            }
-            block[r * 8 + c] = (int)val - 128;
-        }
-    }
-}
-
-int tje_encode_yuv422(
-    unsigned char *dst_buf,
-    int dst_buf_len,
-    int width,
-    int height,
-    const unsigned char *yuv_data,
-    int yuv_stride,
-    int quality)
-{
-    tje_state_t state;
-    int block[64];
-    int dc_y = 0, dc_cb = 0, dc_cr = 0;
-    int mcux, mcuy;
-    int mcu_w, mcu_h;
-
-    if (!dst_buf || dst_buf_len < 1024 || !yuv_data) return 0;
-    if (width < 8 || height < 8) return 0;
-
-    memset(&state, 0, sizeof(state));
-    state.buf = dst_buf;
-    state.buf_len = dst_buf_len;
-    state.pos = 0;
-    state.bitbuf = 0;
-    state.bitcount = 0;
-
-    make_quant_table(state.lum_quant, std_lum_quant, quality);
-    make_quant_table(state.chrom_quant, std_chrom_quant, quality);
-
-    build_huffman_table(&state.dc_lum_ht, dc_lum_bits, dc_lum_val);
-    build_huffman_table(&state.ac_lum_ht, ac_lum_bits, ac_lum_val);
-    build_huffman_table(&state.dc_chrom_ht, dc_chrom_bits, dc_chrom_val);
-    build_huffman_table(&state.ac_chrom_ht, ac_chrom_bits, ac_chrom_val);
-
-    write_jpeg_header(&state, width, height);
-
-    mcu_w = (width + 15) / 16;
-    mcu_h = (height + 7) / 8;
-
-    for (mcuy = 0; mcuy < mcu_h; mcuy++) {
-        for (mcux = 0; mcux < mcu_w; mcux++) {
-            int px = mcux * 16;
-            int py = mcuy * 8;
-
-            extract_y_block_uyvy(block, yuv_data, yuv_stride, px, py, width, height);
-            fdct_int(block);
-            encode_block(&state, block, state.lum_quant,
-                        &state.dc_lum_ht, &state.ac_lum_ht, &dc_y);
-
-            extract_y_block_uyvy(block, yuv_data, yuv_stride, px + 8, py, width, height);
-            fdct_int(block);
-            encode_block(&state, block, state.lum_quant,
-                        &state.dc_lum_ht, &state.ac_lum_ht, &dc_y);
-
-            extract_chroma_block_uyvy(block, yuv_data, yuv_stride, px, py,
-                                      width, height, 0);
-            fdct_int(block);
-            encode_block(&state, block, state.chrom_quant,
-                        &state.dc_chrom_ht, &state.ac_chrom_ht, &dc_cb);
-
-            extract_chroma_block_uyvy(block, yuv_data, yuv_stride, px, py,
-                                      width, height, 1);
-            fdct_int(block);
-            encode_block(&state, block, state.chrom_quant,
-                        &state.dc_chrom_ht, &state.ac_chrom_ht, &dc_cr);
-        }
-    }
-
-    if (state.bitcount > 0) {
-        tje_put_bits(&state, (1u << (8 - state.bitcount)) - 1, 8 - state.bitcount);
-    }
-
-    tje_write_word(&state, 0xFFD9);
-
-    return state.pos;
-}

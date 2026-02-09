@@ -76,6 +76,10 @@ $Ofwcrc.flt: $Ofirmware_crc.o
 $Oscrdump.flt: $Oscrdump.o
 $O_confmig.flt: $Oconf_migrate.o
 $Orawevhst.flt: $Oraw_ev_histo.o
+$Otje.o: tje.c
+	@echo $< '->' $@
+	$(CC) $(subst -Os,-O2,$(subst -fno-inline,,$(CFLAGS))) -nostdinc -c -o $@ $<
+
 $Owebcam.flt: $Owebcam.o $Otje.o
 
 $Oubasic.flt: $Oubasic.o $Oscript_key_funcs.o $(lubasic)/$Olibubasic.a
