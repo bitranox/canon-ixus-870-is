@@ -738,3 +738,136 @@ int tje_encode_yuv411(
     return state.pos;
 }
 
+// ============================================================
+// UYVY (YUV422) encoder — for 640x480 video pipeline frames
+// ============================================================
+
+// UYVY layout: U0 Y0 V0 Y1 | U2 Y2 V2 Y3 | ...
+// 4 bytes per 2 pixels, stride = width * 2
+
+// Extract an 8x8 Y block from UYVY data
+static void extract_y_block_uyvy(int *block, const unsigned char *data,
+                                  int stride, int px, int py,
+                                  int img_width, int img_height)
+{
+    int r, c;
+    for (r = 0; r < 8; r++) {
+        int y = py + r;
+        if (y >= img_height) y = img_height - 1;
+        const unsigned char *row = data + y * stride;
+        for (c = 0; c < 8; c++) {
+            int x = px + c;
+            if (x >= img_width) x = img_width - 1;
+            // Y at byte offset x*2+1
+            block[r * 8 + c] = (int)row[x * 2 + 1] - 128;
+        }
+    }
+}
+
+// Extract an 8x8 U or V block from UYVY data (subsampled 2:1 horizontal)
+static void extract_chroma_block_uyvy(int *block, const unsigned char *data,
+                                       int stride, int px, int py,
+                                       int img_width, int img_height,
+                                       int is_cr)
+{
+    int r, c;
+    for (r = 0; r < 8; r++) {
+        int y = py + r;
+        if (y >= img_height) y = img_height - 1;
+        const unsigned char *row = data + y * stride;
+        for (c = 0; c < 8; c++) {
+            // Each chroma column covers 2 luma pixels
+            int x = px + c * 2;
+            if (x >= img_width) x = img_width - 2;
+            if (x < 0) x = 0;
+            // UYVY pair starts at (x & ~1) * 2
+            int pair_base = (x & ~1) * 2;
+            // U at pair_base+0, V at pair_base+2
+            // Digic IV stores chroma as SIGNED bytes centered at 0,
+            // not unsigned centered at 128. Same as viewport format.
+            block[r * 8 + c] = (int)(signed char)row[pair_base + (is_cr ? 2 : 0)];
+        }
+    }
+}
+
+int tje_encode_uyvy(
+    unsigned char *dst_buf,
+    int dst_buf_len,
+    int width,
+    int height,
+    const unsigned char *yuv_data,
+    int yuv_stride,
+    int quality)
+{
+    tje_state_t state;
+    int block[64];
+    int dc_y = 0, dc_cb = 0, dc_cr = 0;
+    int mcux, mcuy;
+    int mcu_w, mcu_h;
+
+    if (!dst_buf || dst_buf_len < 1024 || !yuv_data) return 0;
+    if (width < 8 || height < 8) return 0;
+
+    memset(&state, 0, sizeof(state));
+    state.buf = dst_buf;
+    state.buf_len = dst_buf_len;
+    state.pos = 0;
+    state.bitbuf = 0;
+    state.bitcount = 0;
+
+    make_quant_table(state.lum_quant, state.lum_recip, std_lum_quant, quality);
+    make_quant_table(state.chrom_quant, state.chrom_recip, std_chrom_quant, quality);
+
+    build_huffman_table(&state.dc_lum_ht, dc_lum_bits, dc_lum_val);
+    build_huffman_table(&state.ac_lum_ht, ac_lum_bits, ac_lum_val);
+    build_huffman_table(&state.dc_chrom_ht, dc_chrom_bits, dc_chrom_val);
+    build_huffman_table(&state.ac_chrom_ht, ac_chrom_bits, ac_chrom_val);
+
+    write_jpeg_header(&state, width, height);
+
+    // MCU size: 16x8 for 4:2:2 (2 Y blocks + 1 Cb + 1 Cr)
+    mcu_w = (width + 15) / 16;
+    mcu_h = (height + 7) / 8;
+
+    for (mcuy = 0; mcuy < mcu_h; mcuy++) {
+        for (mcux = 0; mcux < mcu_w; mcux++) {
+            int px = mcux * 16;
+            int py = mcuy * 8;
+
+            // Y block 0 (left 8 pixels)
+            extract_y_block_uyvy(block, yuv_data, yuv_stride, px, py, width, height);
+            fdct_int(block);
+            encode_block(&state, block, state.lum_quant, state.lum_recip,
+                        &state.dc_lum_ht, &state.ac_lum_ht, &dc_y);
+
+            // Y block 1 (right 8 pixels)
+            extract_y_block_uyvy(block, yuv_data, yuv_stride, px + 8, py, width, height);
+            fdct_int(block);
+            encode_block(&state, block, state.lum_quant, state.lum_recip,
+                        &state.dc_lum_ht, &state.ac_lum_ht, &dc_y);
+
+            // Cb block (subsampled)
+            extract_chroma_block_uyvy(block, yuv_data, yuv_stride, px, py,
+                                      width, height, 0);
+            fdct_int(block);
+            encode_block(&state, block, state.chrom_quant, state.chrom_recip,
+                        &state.dc_chrom_ht, &state.ac_chrom_ht, &dc_cb);
+
+            // Cr block (subsampled)
+            extract_chroma_block_uyvy(block, yuv_data, yuv_stride, px, py,
+                                      width, height, 1);
+            fdct_int(block);
+            encode_block(&state, block, state.chrom_quant, state.chrom_recip,
+                        &state.dc_chrom_ht, &state.ac_chrom_ht, &dc_cr);
+        }
+    }
+
+    if (state.bitcount > 0) {
+        tje_put_bits(&state, (1u << (8 - state.bitcount)) - 1, 8 - state.bitcount);
+    }
+
+    tje_write_word(&state, 0xFFD9);
+
+    return state.pos;
+}
+

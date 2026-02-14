@@ -63,10 +63,13 @@ struct PTPClient::Impl {
             if (libusb_get_device_descriptor(devs[i], &desc) < 0) continue;
 
             if (desc.idVendor == CANON_VID) {
+                fprintf(stderr, "  Found Canon device PID=0x%04X, opening...\n", desc.idProduct);
                 int r = libusb_open(devs[i], &handle);
                 if (r < 0) {
+                    fprintf(stderr, "  libusb_open failed: %s\n", libusb_strerror(static_cast<libusb_error>(r)));
                     continue;
                 }
+                fprintf(stderr, "  libusb_open OK\n");
 
                 camera_info.vendor_id = desc.idVendor;
                 camera_info.product_id = desc.idProduct;
@@ -74,14 +77,20 @@ struct PTPClient::Impl {
                 // Find PTP endpoints
                 libusb_config_descriptor* config;
                 if (libusb_get_active_config_descriptor(devs[i], &config) == 0) {
+                    fprintf(stderr, "  Config: %d interfaces\n", config->bNumInterfaces);
                     for (int j = 0; j < config->bNumInterfaces; j++) {
                         const libusb_interface& iface = config->interface[j];
                         for (int k = 0; k < iface.num_altsetting; k++) {
                             const libusb_interface_descriptor& alt = iface.altsetting[k];
+                            fprintf(stderr, "  Interface %d alt %d: class=%d subclass=%d protocol=%d endpoints=%d\n",
+                                    j, k, alt.bInterfaceClass, alt.bInterfaceSubClass,
+                                    alt.bInterfaceProtocol, alt.bNumEndpoints);
                             // PTP class: 6 (Image), subclass: 1, protocol: 1
                             if (alt.bInterfaceClass == 6 || alt.bInterfaceClass == 0xFF) {
                                 for (int e = 0; e < alt.bNumEndpoints; e++) {
                                     const libusb_endpoint_descriptor& ep = alt.endpoint[e];
+                                    fprintf(stderr, "    EP 0x%02X: attr=0x%02X maxpkt=%d\n",
+                                            ep.bEndpointAddress, ep.bmAttributes, ep.wMaxPacketSize);
                                     if ((ep.bmAttributes & 0x03) == LIBUSB_TRANSFER_TYPE_BULK) {
                                         if (ep.bEndpointAddress & LIBUSB_ENDPOINT_IN) {
                                             ep_in = ep.bEndpointAddress;
@@ -125,11 +134,20 @@ struct PTPClient::Impl {
             libusb_detach_kernel_driver(handle, 0);
         }
 #endif
-        int r = libusb_claim_interface(handle, 0);
+        // Set configuration (may be needed on Windows with WinUSB)
+        int r = libusb_set_configuration(handle, 1);
+        if (r < 0 && r != LIBUSB_ERROR_BUSY) {
+            fprintf(stderr, "  set_configuration(1): %s\n", libusb_strerror(static_cast<libusb_error>(r)));
+        } else {
+            fprintf(stderr, "  set_configuration(1): OK (r=%d)\n", r);
+        }
+
+        r = libusb_claim_interface(handle, 0);
         if (r < 0) {
             last_error = "Failed to claim USB interface: " + std::string(libusb_strerror(static_cast<libusb_error>(r)));
             return false;
         }
+        fprintf(stderr, "  claim_interface(0): OK\n");
         return true;
     }
 
@@ -248,8 +266,39 @@ struct PTPClient::Impl {
         return true;
     }
 
+    // Reset USB device to clear any stale state
+    void reset_device() {
+        if (handle) {
+            libusb_reset_device(handle);
+        }
+    }
+
     // Open PTP session
     bool open_session() {
+        fprintf(stderr, "  PTP: endpoints in=0x%02X out=0x%02X int=0x%02X\n", ep_in, ep_out, ep_int);
+
+        // Clear any stalled endpoints
+        {
+            int r;
+            r = libusb_clear_halt(handle, ep_out);
+            fprintf(stderr, "  PTP: clear_halt(OUT)=%d\n", r);
+            r = libusb_clear_halt(handle, ep_in);
+            fprintf(stderr, "  PTP: clear_halt(IN)=%d\n", r);
+        }
+
+        // Clear any stale data on the IN endpoint (non-blocking drain)
+        {
+            uint8_t drain[512];
+            int transferred = 0;
+            int r;
+            do {
+                r = libusb_bulk_transfer(handle, ep_in, drain, sizeof(drain), &transferred, 100);
+                if (r == 0) {
+                    fprintf(stderr, "  PTP: drained %d stale bytes from IN endpoint\n", transferred);
+                }
+            } while (r == 0 && transferred > 0);
+        }
+
         uint32_t params[1] = { session_id };
         // OpenSession opcode = 0x1002
         uint16_t opcode = 0x1002;
@@ -266,22 +315,32 @@ struct PTPClient::Impl {
         memcpy(buf + 8, &transaction_id, 4);
         memcpy(buf + PTP_HEADER_SIZE, &params[0], 4);
 
+        fprintf(stderr, "  PTP: sending OpenSession (%d bytes)...\n", len);
         int transferred = 0;
         int r = libusb_bulk_transfer(handle, ep_out, buf, len, &transferred, USB_TIMEOUT);
         if (r < 0) {
-            last_error = "Failed to open PTP session";
+            last_error = "Failed to send OpenSession: " + std::string(libusb_strerror(static_cast<libusb_error>(r)));
             return false;
         }
+        fprintf(stderr, "  PTP: sent %d bytes, waiting for response...\n", transferred);
 
         // Read response
         PTPContainer resp{};
-        if (!receive_response(resp)) return false;
+        if (!receive_response(resp)) {
+            last_error = "Failed to read OpenSession response: " + last_error;
+            return false;
+        }
+        fprintf(stderr, "  PTP: OpenSession response code=0x%04X params=%d\n", resp.code, resp.num_params);
         if (resp.code != PTP_RC_OK) {
             // Session may already be open
-            if (resp.code != 0x201E) { // SessionAlreadyOpen
-                last_error = "OpenSession failed: 0x" + std::to_string(resp.code);
-                return false;
+            if (resp.code == 0x201E) { // SessionAlreadyOpen
+                fprintf(stderr, "  PTP: session already open, reusing\n");
+                return true;
             }
+            char hex[16];
+            snprintf(hex, sizeof(hex), "0x%04X", resp.code);
+            last_error = "OpenSession failed with code " + std::string(hex);
+            return false;
         }
         return true;
     }
@@ -314,8 +373,18 @@ bool PTPClient::connect() {
         return false;
     }
     if (!impl_->open_session()) {
-        impl_->cleanup_libusb();
-        return false;
+        // Try USB reset and retry once
+        fprintf(stderr, "Session open failed (%s), resetting USB device...\n", impl_->last_error.c_str());
+        impl_->reset_device();
+        std::this_thread::sleep_for(std::chrono::seconds(2));
+        if (!impl_->claim_interface()) {
+            impl_->cleanup_libusb();
+            return false;
+        }
+        if (!impl_->open_session()) {
+            impl_->cleanup_libusb();
+            return false;
+        }
     }
 
     impl_->connected = true;
@@ -368,9 +437,25 @@ bool PTPClient::start_webcam(int quality) {
     PTPContainer resp{};
     std::vector<uint8_t> dummy;
 
+    fprintf(stderr, "  start_webcam: sending CHDK_GetMJPEGFrame quality=%d sub=WEBCAM_START...\n", quality);
+
     // Start command triggers module load + mode switch on camera, which can take ~5s
     if (!impl_->chdk_command(CHDK_GetMJPEGFrame, quality, WEBCAM_START, 0, resp, &dummy, 10000)) {
+        fprintf(stderr, "  start_webcam: chdk_command failed: %s\n", impl_->last_error.c_str());
         return false;
+    }
+
+    fprintf(stderr, "  start_webcam: resp code=0x%04X params=%d data=%zu bytes\n",
+            resp.code, resp.num_params, dummy.size());
+    for (int i = 0; i < resp.num_params && i < 5; i++) {
+        fprintf(stderr, "    param[%d] = 0x%08X (%u)\n", i, resp.params[i], resp.params[i]);
+    }
+    if (!dummy.empty()) {
+        fprintf(stderr, "    data: ");
+        for (size_t i = 0; i < dummy.size() && i < 64; i++) {
+            fprintf(stderr, "%02X ", dummy[i]);
+        }
+        fprintf(stderr, "\n");
     }
 
     // If start failed (0xDEAD marker), report error string from camera
@@ -378,9 +463,79 @@ bool PTPClient::start_webcam(int quality) {
         if (!dummy.empty() && dummy[0] != 0) {
             std::string err_msg(dummy.begin(), dummy.end());
             impl_->last_error = "Camera module error: " + err_msg;
+            fprintf(stderr, "  start_webcam: ERROR: %s\n", err_msg.c_str());
         } else {
             impl_->last_error = "Camera start failed (rc=" + std::to_string(static_cast<int>(resp.params[1])) + ")";
+            fprintf(stderr, "  start_webcam: FAILED rc=%d\n", static_cast<int>(resp.params[1]));
         }
+    }
+
+    // Parse startup diagnostics (0xBEEF marker = start success with DMA chain info)
+    if (resp.num_params >= 4 && resp.params[3] == 0xBEEF && !dummy.empty() && dummy.size() >= 104) {
+        auto u32 = [&](int off) -> uint32_t {
+            uint32_t v; memcpy(&v, dummy.data() + off, 4); return v;
+        };
+        fprintf(stderr, "\n=== DMA CHAIN DIAGNOSTICS (after recording start) ===\n");
+        fprintf(stderr, "  STATE STRUCT @ 0x70D8:\n");
+        fprintf(stderr, "    +0x48  MJPEG active   = %u\n", u32(0));
+        fprintf(stderr, "    +0x4C  (paired flag)  = %u\n", u32(4));
+        fprintf(stderr, "    +0x54  DMA status     = %u\n", u32(8));
+        fprintf(stderr, "    +0x58  DMA frame idx  = %u\n", u32(12));
+        fprintf(stderr, "    +0x5C  DMA req state  = %u (3=req, 4=stop)\n", u32(16));
+        fprintf(stderr, "    +0x64  VRAM buf addr  = 0x%08X\n", u32(20));
+        fprintf(stderr, "    +0xA0  DMA callback   = 0x%08X\n", u32(24));
+        fprintf(stderr, "    +0xEC  pipeline active= %u\n", u32(28));
+        fprintf(stderr, "    +0xD4  video mode     = %u (2=VGA)\n", u32(32));
+        fprintf(stderr, "    +0x114 rec callback 1 = 0x%08X  %s\n", u32(36),
+                u32(36) ? "(sub_FF8C3BFC ran!)" : "(=0, pipeline NOT connected!)");
+        fprintf(stderr, "    +0x6C  rec buffer     = 0x%08X  %s\n", u32(40),
+                u32(40) ? "(set)" : "(=0, NOT set!)");
+        fprintf(stderr, "    +0x118 rec callback 2 = 0x%08X  %s\n", u32(44),
+                u32(44) ? "(set)" : "(=0, NOT set!)");
+        fprintf(stderr, "  JPCORE flag @0x7228C    = %u\n", u32(48));
+        fprintf(stderr, "  movie_status @0x51E4    = %u  %s\n", u32(52),
+                u32(52) == 4 ? "(=4, RECORDING)" :
+                u32(52) == 1 ? "(=1, STOPPED)" :
+                u32(52) == 5 ? "(=5, STOPPING)" : "");
+        fprintf(stderr, "  wait retries used       = %u / 40\n", u32(56));
+        fprintf(stderr, "  VRAM@0x40EA23D0: ");
+        for (int i = 64; i < 80 && i < (int)dummy.size(); i++)
+            fprintf(stderr, "%02X ", dummy[i]);
+        fprintf(stderr, "\n");
+        fprintf(stderr, "  MjpegActiveCheck()      = %u\n", u32(80));
+        fprintf(stderr, "  dims                    = %ux%u\n", u32(84), u32(88));
+        if (dummy.size() >= 128) {
+            uint32_t jpcore_out = u32(104);
+            fprintf(stderr, "  JPCORE out buf @0x2564  = 0x%08X\n", jpcore_out);
+            fprintf(stderr, "  data@JPCORE out: %02X %02X %02X %02X",
+                    dummy[108], dummy[109], dummy[110], dummy[111]);
+            if (dummy[108] == 0xFF && dummy[109] == 0xD8)
+                fprintf(stderr, "  << JPEG SOI FOUND!");
+            fprintf(stderr, "\n");
+        }
+        if (dummy.size() >= 192) {
+            fprintf(stderr, "  piVar1[3] DMA active   = %u  %s\n", u32(128),
+                    u32(128) == 1 ? "(JPCORE active)" : "(NOT active!)");
+            fprintf(stderr, "  piVar1[10] mode index  = %u\n", u32(172));
+            fprintf(stderr, "  +0xF0 frame skip       = %u\n", u32(184));
+        }
+        if (dummy.size() >= 256) {
+            uint32_t cmask = u32(196);
+            fprintf(stderr, "  PS3 completion mask    = 0x%X  %s\n", cmask,
+                    cmask == 6 ? "(=6, JPCORE started OK)" :
+                    cmask == 7 ? "(=7, JPCORE_DMA_Start FAILED)" : "(incomplete)");
+            fprintf(stderr, "    bit0(JPCORE_fail)=%u  bit1(pre)=%u  bit2(post)=%u\n",
+                    cmask & 1, (cmask >> 1) & 1, (cmask >> 2) & 1);
+            fprintf(stderr, "  JPCORE_DMA_Start ret   = %u  %s\n", u32(200),
+                    u32(200) == 0 ? "(=0, OK)" : "(=1, FAILED)");
+            fprintf(stderr, "  JPCORE HW 0xC0F04908   = 0x%08X\n", u32(244));
+            uint32_t soi_off = u32(248);
+            if (soi_off == 0xFFFFFFFF)
+                fprintf(stderr, "  SOI scan in piVar1[4]: NOT FOUND in 8KB\n");
+            else
+                fprintf(stderr, "  SOI scan in piVar1[4]: FOUND at offset %u\n", soi_off);
+        }
+        fprintf(stderr, "=== END DMA CHAIN DIAGNOSTICS ===\n\n");
     }
 
     return (resp.code == PTP_RC_OK);
@@ -400,14 +555,243 @@ bool PTPClient::get_frame(MJPEGFrame& frame) {
     std::vector<uint8_t> data;
 
     if (!impl_->chdk_command(CHDK_GetMJPEGFrame, 0, 0, 0, resp, &data)) {
+        impl_->last_error = "chdk_command failed: " + impl_->last_error;
         return false;
     }
 
     if (resp.code != PTP_RC_OK) {
+        char hex[16];
+        snprintf(hex, sizeof(hex), "0x%04X", resp.code);
+        impl_->last_error = std::string("PTP resp code=") + hex;
         return false;
     }
 
     if (resp.num_params < 1 || resp.params[0] == 0) {
+        static int dbg_count = 0;
+        if (dbg_count++ < 10) {
+            // Decode hw diagnostics from param4: call|soi|eoi|hw_avail (8 bits each)
+            uint32_t hw_diag = (resp.num_params >= 4) ? resp.params[3] : 0;
+            fprintf(stderr, "  get_frame: active=%u gf_rc=%d hw_avail=%u fail:call=%u soi=%u eoi=%u\n",
+                    resp.num_params >= 2 ? resp.params[1] : 0,
+                    resp.num_params >= 3 ? static_cast<int>(resp.params[2]) : 0,
+                    hw_diag & 0xFF,
+                    (hw_diag >> 24) & 0xFF,
+                    (hw_diag >> 16) & 0xFF,
+                    (hw_diag >> 8) & 0xFF);
+
+            // Parse HW diagnostic buffer v11 (512 bytes — 8 blocks)
+            if (data.size() >= 64) {
+                auto u32 = [&](int off) -> uint32_t {
+                    if (off + 4 > (int)data.size()) return 0xDEADDEAD;
+                    uint32_t v; memcpy(&v, data.data() + off, 4); return v;
+                };
+                auto hex16 = [&](int off) {
+                    for (int i = off; i < off + 16 && i < (int)data.size(); i++)
+                        fprintf(stderr, "%02X ", data[i]);
+                };
+
+                // ---- Block 0 (0-63): MJPEG State @ 0x70D8 ----
+                fprintf(stderr, "  --- Block 0: MJPEG State @ 0x70D8 ---\n");
+                fprintf(stderr, "    +0x48  MJPEG active   = %u\n", u32(0));
+                fprintf(stderr, "    +0x4C  paired flag    = %u\n", u32(4));
+                fprintf(stderr, "    +0x54  DMA status     = %u\n", u32(8));
+                fprintf(stderr, "    +0x58  DMA frame idx  = %u\n", u32(12));
+                fprintf(stderr, "    +0x5C  DMA req state  = %u\n", u32(16));
+                fprintf(stderr, "    +0x60  ring buf addr  = 0x%08X\n", u32(20));
+                fprintf(stderr, "    +0x64  VRAM buf addr  = 0x%08X\n", u32(24));
+                fprintf(stderr, "    +0x6C  rec buffer     = 0x%08X\n", u32(28));
+                fprintf(stderr, "    +0x80  cleanup cb     = 0x%08X\n", u32(32));
+                fprintf(stderr, "    +0xA0  DMA callback   = 0x%08X\n", u32(36));
+                fprintf(stderr, "    +0xB0  event flag     = 0x%08X\n", u32(40));
+                fprintf(stderr, "    +0xD4  video mode     = %u (2=VGA)\n", u32(44));
+                fprintf(stderr, "    +0xEC  pipeline active= %u\n", u32(48));
+                fprintf(stderr, "    +0xF0  frame skip     = %u\n", u32(52));
+                fprintf(stderr, "    +0x114 rec callback 1 = 0x%08X\n", u32(56));
+                fprintf(stderr, "    +0x118 rec callback 2 = 0x%08X\n", u32(60));
+
+                // ---- Block 1 (64-127): Movie Task @ 0x51A8 ----
+                if (data.size() >= 128) {
+                    fprintf(stderr, "  --- Block 1: Movie Task @ 0x51A8 ---\n");
+                    fprintf(stderr, "    +0x00 base           = 0x%08X\n", u32(64));
+                    fprintf(stderr, "    +0x1C msg queue      = 0x%08X\n", u32(68));
+                    fprintf(stderr, "    +0x24 flag           = %u\n", u32(72));
+                    fprintf(stderr, "    +0x28 counter        = %u\n", u32(76));
+                    fprintf(stderr, "    +0x2C flag           = %u\n", u32(80));
+                    fprintf(stderr, "    +0x30 counter        = %u\n", u32(84));
+                    fprintf(stderr, "    +0x38 counter        = %u\n", u32(88));
+                    fprintf(stderr, "    +0x3C STATE          = %u  %s\n", u32(92),
+                            u32(92) == 0 ? "(idle)" :
+                            u32(92) == 3 ? "(init)" :
+                            u32(92) == 4 ? "(RECORDING)" :
+                            u32(92) == 5 ? "(stopping)" : "");
+                    fprintf(stderr, "    +0x48                = 0x%08X\n", u32(96));
+                    fprintf(stderr, "    +0x4C                = 0x%08X\n", u32(100));
+                    fprintf(stderr, "    +0x50 frame counter  = %u\n", u32(104));
+                    fprintf(stderr, "    +0x54 error code     = 0x%08X\n", u32(108));
+                    fprintf(stderr, "    +0xA0 callback       = 0x%08X\n", u32(112));
+                    fprintf(stderr, "    +0x68                = 0x%08X\n", u32(116));
+                    fprintf(stderr, "    +0x6C                = 0x%08X\n", u32(120));
+                    fprintf(stderr, "    movie_status @0x51E4 = %u\n", u32(124));
+                }
+
+                // ---- Block 2 (128-191): Ring Buffer ----
+                if (data.size() >= 192) {
+                    uint32_t rb = u32(128);
+                    fprintf(stderr, "  --- Block 2: Ring Buffer @ 0x%08X ---\n", rb);
+                    if (u32(132) != 0xDEAD0000) {
+                        fprintf(stderr, "    +0x1C write ptr      = 0x%08X\n", u32(132));
+                        fprintf(stderr, "    +0x28 frame count    = %u\n", u32(136));
+                        fprintf(stderr, "    +0x40 max frames     = %u\n", u32(140));
+                        fprintf(stderr, "    +0x5C frame data sz  = %u\n", u32(144));
+                        fprintf(stderr, "    +0x70 total frame sz = %u\n", u32(148));
+                        fprintf(stderr, "    +0xBC index          = %u\n", u32(152));
+                        fprintf(stderr, "    +0xC0 buf start      = 0x%08X\n", u32(156));
+                        fprintf(stderr, "    +0xC4 buf end        = 0x%08X\n", u32(160));
+                        fprintf(stderr, "    +0xC8 status         = %u\n", u32(164));
+                        fprintf(stderr, "    +0xD4 value          = 0x%08X\n", u32(168));
+                        fprintf(stderr, "    +0x148 remaining lo  = %u\n", u32(172));
+                        fprintf(stderr, "    +0x14C remaining hi  = %u\n", u32(176));
+                        fprintf(stderr, "    +0x150 used lo       = %u\n", u32(180));
+                        fprintf(stderr, "    +0x154 used hi       = %u\n", u32(184));
+                        fprintf(stderr, "    +0x94 divisor        = %u\n", u32(188));
+                    } else {
+                        fprintf(stderr, "    (ring buffer invalid)\n");
+                    }
+                }
+
+                // ---- Block 3 (192-255): JPCORE + HW regs ----
+                if (data.size() >= 256) {
+                    fprintf(stderr, "  --- Block 3: JPCORE + HW ---\n");
+                    fprintf(stderr, "    JPCORE flag @0x7228C = %u\n", u32(192));
+                    fprintf(stderr, "    piVar1[0] init       = 0x%08X  %s\n", u32(196),
+                            u32(196) == 0 ? "(NOT INIT!)" : "(ok)");
+                    fprintf(stderr, "    piVar1[3] active     = %u  %s\n", u32(200),
+                            u32(200) == 1 ? "(JPCORE active)" : "(NOT active!)");
+                    fprintf(stderr, "    piVar1[4] output buf = 0x%08X\n", u32(204));
+                    fprintf(stderr, "    piVar1[5]            = 0x%08X  %s\n", u32(208),
+                            u32(208) == 0xFFFFFFFF ? "(=-1, BLOCKED!)" : "(ok)");
+                    fprintf(stderr, "    piVar1[10] index     = %u\n", u32(212));
+                    fprintf(stderr, "    buf[2] JPCORE out    = 0x%08X\n", u32(216));
+                    uint32_t cmask = u32(220);
+                    fprintf(stderr, "    PS3 completion mask  = 0x%X  %s\n", cmask,
+                            cmask == 6 ? "(JPCORE OK)" :
+                            cmask == 7 ? "(JPCORE FAIL)" : "");
+                    fprintf(stderr, "    HW 0xC0F04908 DMA    = 0x%08X\n", u32(224));
+                    fprintf(stderr, "    dbl-buf[0] +0x144    = 0x%08X\n", u32(228));
+                    fprintf(stderr, "    dbl-buf[1] +0x148    = 0x%08X\n", u32(232));
+                    fprintf(stderr, "    +0x120 param3        = 0x%08X\n", u32(236));
+                    fprintf(stderr, "    +0xA4 (StopCont)     = 0x%08X\n", u32(240));
+                    fprintf(stderr, "    +0xB8 semaphore      = 0x%08X\n", u32(244));
+                    fprintf(stderr, "    iVar5 @0x12850       = 0x%08X\n", u32(248));
+                    fprintf(stderr, "    source               = %u (0=none,1=spy,2=VRAM,3=db0,4=db1,5=pi4,6=b2,7=cb2)\n", u32(252));
+                }
+
+                // ---- Block 4 (256-319): Spy Results ----
+                if (data.size() >= 320) {
+                    fprintf(stderr, "  --- Block 4: SPY RESULTS ---\n");
+                    uint32_t spy_magic = u32(256);
+                    fprintf(stderr, "    spy magic            = 0x%08X  %s\n", spy_magic,
+                            spy_magic == 0x52455753 ? "(\"SREW\" = FRAMES CAPTURED!)" : "(no frames yet)");
+                    fprintf(stderr, "    spy jpeg_ptr         = 0x%08X\n", u32(260));
+                    fprintf(stderr, "    spy jpeg_size        = %u\n", u32(264));
+                    fprintf(stderr, "    spy frame_count      = %u\n", u32(268));
+                    uint32_t init_flag = u32(272);
+                    fprintf(stderr, "    spy init_flag        = 0x%08X  %s\n", init_flag,
+                            init_flag == 0xCAFE0001 ? "(init case ran!)" : "(init NOT reached)");
+                    fprintf(stderr, "    spy last error       = 0x%08X\n", u32(276));
+                    fprintf(stderr, "    spy error count      = %u\n", u32(280));
+                    fprintf(stderr, "    spy metadata1        = 0x%08X\n", u32(284));
+                    fprintf(stderr, "    spy metadata2        = 0x%08X\n", u32(288));
+                    fprintf(stderr, "    spy task_state       = %u\n", u32(292));
+                    fprintf(stderr, "    spy task_0xA0        = 0x%08X\n", u32(296));
+                    fprintf(stderr, "    rec_cb_count         = %u\n", u32(300));
+                    fprintf(stderr, "    rec_cb_arg0          = 0x%08X\n", u32(304));
+                    fprintf(stderr, "    rec_cb_arg1          = 0x%08X\n", u32(308));
+                    fprintf(stderr, "    rec_cb_arg2          = 0x%08X\n", u32(312));
+                    fprintf(stderr, "    rec_cb_arg3          = 0x%08X\n", u32(316));
+                }
+
+                // ---- Block 5 (320-383): Buffer Samples ----
+                if (data.size() >= 384) {
+                    fprintf(stderr, "  --- Block 5: Buffer Samples ---\n");
+                    fprintf(stderr, "    VRAM@0x40EA23D0: "); hex16(320); fprintf(stderr, "\n");
+                    fprintf(stderr, "    spy jpeg_ptr:    "); hex16(336); fprintf(stderr, "\n");
+                    fprintf(stderr, "    rec_cb_arg2:     "); hex16(352); fprintf(stderr, "\n");
+                    fprintf(stderr, "    rec_cb_arg2+256: "); hex16(368); fprintf(stderr, "\n");
+                    // Check for JPEG SOI in any sample
+                    for (int s = 0; s < 4; s++) {
+                        int base = 320 + s * 16;
+                        if (data[base] == 0xFF && data[base+1] == 0xD8)
+                            fprintf(stderr, "    *** JPEG SOI found in sample %d! ***\n", s);
+                    }
+                }
+
+                // ---- Block 6 (384-455): Extended state ----
+                if (data.size() >= 456) {
+                    fprintf(stderr, "  --- Block 6: Extended ---\n");
+                    fprintf(stderr, "    GCMJVD return        = %d\n", (int)u32(384));
+                    fprintf(stderr, "    hw_frame_index       = %u\n", u32(388));
+                    fprintf(stderr, "    state+0x10..0x44:   ");
+                    for (int i = 392; i <= 444; i += 4)
+                        fprintf(stderr, " %08X", u32(i));
+                    fprintf(stderr, "\n");
+                    fprintf(stderr, "    state+0x100          = 0x%08X\n", u32(448));
+                    fprintf(stderr, "    state+0x104          = 0x%08X\n", u32(452));
+                }
+
+                // ---- Block 7 (456-511): More JPCORE ----
+                if (data.size() >= 512) {
+                    fprintf(stderr, "  --- Block 7: JPCORE extended ---\n");
+                    fprintf(stderr, "    piVar1[1]            = 0x%08X\n", u32(456));
+                    fprintf(stderr, "    piVar1[2]            = 0x%08X\n", u32(460));
+                    fprintf(stderr, "    piVar1[6]            = 0x%08X\n", u32(464));
+                    fprintf(stderr, "    piVar1[7] sem        = 0x%08X\n", u32(468));
+                    fprintf(stderr, "    piVar1[9]            = 0x%08X\n", u32(472));
+                    fprintf(stderr, "    buf[0]               = 0x%08X\n", u32(476));
+                    fprintf(stderr, "    buf[1]               = 0x%08X\n", u32(480));
+                    fprintf(stderr, "    buf[4]               = 0x%08X\n", u32(484));
+                    fprintf(stderr, "    buf[6]               = 0x%08X\n", u32(488));
+                    fprintf(stderr, "    PS3 frame param      = 0x%08X\n", u32(492));
+                    fprintf(stderr, "    JPCORE_DMA_Start ret = %u\n", u32(496));
+                    fprintf(stderr, "    PS3 step2            = %u\n", u32(500));
+                    fprintf(stderr, "    PS3 step3            = %u\n", u32(504));
+                    fprintf(stderr, "    HW 0xC0F04900        = 0x%08X\n", u32(508));
+                }
+
+                // ---- Block 8 (512-575): HW or SW path diagnostics ----
+                if (data.size() >= 552) {
+                    uint32_t marker = u32(544);
+                    if ((marker & 0xFFFF0000) == 0x53570000) {
+                        // SW path diagnostics (marker = "SW" + hw_avail)
+                        fprintf(stderr, "  --- Block 8: SW Path Diagnostics ---\n");
+                        fprintf(stderr, "    sw_total_calls       = %u\n", u32(512));
+                        fprintf(stderr, "    sw_fail_null (vp)    = %u\n", u32(516));
+                        fprintf(stderr, "    sw_fail_stale        = %u\n", u32(520));
+                        fprintf(stderr, "    sw_fail_encode       = %u\n", u32(524));
+                        fprintf(stderr, "    sw_last_vp_addr      = 0x%08X\n", u32(528));
+                        fprintf(stderr, "    last_vp_checksum     = 0x%08X\n", u32(532));
+                        fprintf(stderr, "    frame_count          = %u\n", u32(536));
+                        fprintf(stderr, "    last_jpeg_size       = %u\n", u32(540));
+                        fprintf(stderr, "    hw_fail_total        = %u\n", u32(548));
+                    } else {
+                        // HW path diagnostics (ISR callback)
+                        fprintf(stderr, "  --- Block 8: Callback Addrs + Counters ---\n");
+                        fprintf(stderr, "    DMA reg 0xC0F04908   = 0x%08X\n", u32(512));
+                        fprintf(stderr, "    arg2 value           = 0x%08X\n", u32(516));
+                        fprintf(stderr, "    db0 addr             = 0x%08X\n", u32(520));
+                        fprintf(stderr, "    db1 addr             = 0x%08X\n", u32(524));
+                        fprintf(stderr, "    buf[2] addr          = 0x%08X\n", u32(528));
+                        fprintf(stderr, "    callback count       = %u\n", u32(532));
+                        fprintf(stderr, "    hw_fail_soi          = %u\n", u32(536));
+                        fprintf(stderr, "    hw_fail_eoi          = %u\n", u32(540));
+                        fprintf(stderr, "    hw_fail_total        = %u\n", u32(544));
+                        fprintf(stderr, "    hw_frame_index       = %u\n", u32(548));
+                    }
+                }
+            }
+        }
+        impl_->last_error = "no frame (gf_rc=" +
+                            std::to_string(resp.num_params >= 3 ? static_cast<int>(resp.params[2]) : 0) + ")";
         return false;
     }
 
@@ -416,7 +800,12 @@ bool PTPClient::get_frame(MJPEGFrame& frame) {
     frame.height = (resp.num_params >= 3) ? resp.params[2] : 0;
     frame.frame_num = (resp.num_params >= 4) ? resp.params[3] : 0;
 
-    return !frame.data.empty();
+    if (frame.data.empty()) {
+        impl_->last_error = "empty frame data";
+        return false;
+    }
+
+    return true;
 }
 
 bool PTPClient::execute_script(const std::string& script) {

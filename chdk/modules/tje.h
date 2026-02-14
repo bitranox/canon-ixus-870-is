@@ -27,4 +27,19 @@ int tje_encode_yuv411(
     int quality
 );
 
+// Encode a UYVY (YUV422) image to JPEG in memory.
+// This is the Digic IV video pipeline output format (640x480).
+// Each pair of 2 pixels = 4 bytes: U Y0 V Y1
+// Parameters same as tje_encode_yuv411.
+// yuv_stride should be width * 2.
+int tje_encode_uyvy(
+    unsigned char *dst_buf,
+    int dst_buf_len,
+    int width,
+    int height,
+    const unsigned char *yuv_data,
+    int yuv_stride,
+    int quality
+);
+
 #endif

@@ -28,6 +28,12 @@ typedef struct {
     int             frame_size;     // Last frame size in bytes
     unsigned int    width;          // Current frame width
     unsigned int    height;         // Current frame height
+    unsigned int    hw_fail_call;   // HW: GetContinuousMovieJpegVRAMData failed
+    unsigned int    hw_fail_soi;    // HW: no JPEG SOI marker in VRAM
+    unsigned int    hw_fail_eoi;    // HW: no JPEG EOI marker found
+    unsigned int    hw_available;   // 1 if hardware encoder active
+    unsigned char  *diag_data;      // HW diagnostic buffer (NULL if no data)
+    unsigned int    diag_len;       // Length of diagnostic data in bytes
 } webcam_status_t;
 
 // Module interface

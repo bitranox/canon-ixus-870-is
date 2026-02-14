@@ -400,6 +400,8 @@
             reboot
             shutdown
             camera_shutdown_in_a_second
+            disable_shutdown
+            enable_shutdown
 
             get_usb_power
             start_usb_HPtimer
