@@ -1,0 +1,23 @@
+﻿Dump Ixus870_SD880 fw. 1.01A
+
+13-Dec-2008 by by Grizp
+
+forum: http://chdk.setepontos.com/index.php/topic,288.msg25946/topicseen.html#msg25946
+-------------
+Canon DIGITAL IXUS 870 IS - firmware 1.01a
+« Reply #117 on: Today at 07:17:31 »
+I noticed that my new IXUS 870 IS has a newer firmware version (1.01a Oct 15th 2008) than previously posted:
+
+http://www.zshare.net/download/5266486943f57f47/
+
+Canon DIGITAL IXUS 870 IS   
+PID:3196 PAL D
+Firmware Ver GM1.01A
+NoError
+Oct 15 2008  18:36:07
+
+Adj Ver.008.001
+
+Adj. Ver.008.001
+IS Firm Ver.   2.09
+IS Param Ver.  2.07

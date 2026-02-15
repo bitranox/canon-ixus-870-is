@@ -1,0 +1,372 @@
+==========================================================================
+Video Path Decompilation - ISP to JPCORE routing
+Firmware: IXUS 870 IS / SD880 IS, version 1.01a
+==========================================================================
+
+##########################################################################
+# FUN_ff9e508c - Video FrameProcessing (mode 2, calls VideoRecPipelineSetup with mode=5?)
+# Address: 0xff9e508c
+##########################################################################
+
+Function: FUN_ff9e508c
+Entry: ff9e508c
+Size: 332 bytes
+
+--- CALLERS ---
+  UNCONDITIONAL_CALL from ff9e5390 in FUN_ff9e5328_FrameProcessing (ff9e5328)
+  Total: 1
+
+--- CALLEES ---
+  ff9e50b8 -> ff9e4ef0 = FUN_ff9e4ef0 (ff9e4ef0)
+  ff9e50cc -> ff9e4c20 = FUN_ff9e4c20 (ff9e4c20)
+  ff9e50fc -> ff9e4ec0 = FUN_ff9e4ec0 (ff9e4ec0)
+  ff9e510c -> ff9e4e7c = FUN_ff9e4e7c (ff9e4e7c)
+  ff9e5114 -> ffa0467c = FUN_ffa0467c (ffa0467c)
+  ff9e5134 -> ffa03bc8 = VideoRecPipelineSetup_FFA03BC8 (ffa03bc8)
+  ff9e5148 -> ffa02ddc = PipelineConfig_FFA02DDC (ffa02ddc)
+  ff9e5164 -> ffa0473c = FUN_ffa0473c (ffa0473c)
+  ff9e5170 -> ff8f70f8 = PipelineScalerConfig2_FF8F70F8 (ff8f70f8)
+  ff9e5178 -> ff8f7110 = PipelineScalerConfig1_FF8F7110 (ff8f7110)
+  ff9e5188 -> ff8f7128 = FUN_ff8f7128 (ff8f7128)
+  ff9e51a8 -> ff8efa6c = PipelineRouting_FF8EFA6C (ff8efa6c)
+  ff9e51bc -> ff9e4df8 = DMAInterruptSetup_FF9E4DF8 (ff9e4df8)
+  ff9e51cc -> ff8efabc = FUN_ff8efabc_JPCORE_RegisterCallback (ff8efabc)
+  Total: 14
+
+--- DECOMPILED CODE ---
+
+void FUN_ff9e508c(undefined4 param_1,undefined4 param_2,int param_3,undefined4 param_4,
+                 undefined4 param_5,undefined4 param_6)
+
+{
+  undefined4 *puVar1;
+  int iVar2;
+  undefined4 local_6c;
+  undefined4 local_68;
+  undefined4 local_64;
+  undefined4 local_60;
+  undefined1 auStack_5c [16];
+  undefined1 auStack_4c [8];
+  undefined4 local_44;
+  undefined4 local_40;
+  undefined4 local_3c;
+  undefined4 local_38;
+  undefined4 local_34;
+  undefined4 local_30;
+  undefined4 local_2c;
+  undefined4 local_28;
+  undefined1 auStack_24 [24];
+  
+  local_68 = 0;
+  FUN_ff9e4ef0(param_1,param_2,param_3,param_5,param_6,&local_44);
+  FUN_ff9e4c20(auStack_5c,&local_6c,auStack_4c,&local_44);
+  local_3c = 0;
+  local_38 = local_44;
+  local_2c = local_40;
+  local_28 = 0;
+  local_30 = 0;
+  local_34 = 0;
+  FUN_ff9e4ec0(auStack_5c,&local_60,&local_64);
+  FUN_ff9e4e7c(auStack_5c,&local_3c,&local_68);
+  FUN_ffa0467c(3);
+  VideoRecPipelineSetup_FFA03BC8(auStack_24,2,local_60,local_64,&local_3c,auStack_5c);
+  PipelineConfig_FFA02DDC(&local_3c,5,local_6c,auStack_24);
+  puVar1 = DAT_ff9e5d28;
+  *DAT_ff9e5d28 = local_38;
+  puVar1[1] = local_2c;
+  FUN_ffa0473c(5);
+  PipelineScalerConfig2_FF8F70F8(*puVar1,1);
+  PipelineScalerConfig1_FF8F7110(2);
+  FUN_ff8f7128(param_3 != 1);
+  iVar2 = DAT_ff9e4e60;
+  puVar1 = (undefined4 *)(DAT_ff9e4e60 + 100);
+  *(undefined4 *)(DAT_ff9e4e60 + 0x30) = *(undefined4 *)(DAT_ff9e4e60 + 0x60);
+  *(undefined4 *)(iVar2 + 0x34) = *puVar1;
+  PipelineRouting_FF8EFA6C(0,0x11);
+  DMAInterruptSetup_FF9E4DF8(0,DAT_ff9e5d2c,0,1);
+  FUN_ff8efabc_JPCORE_RegisterCallback(0,DAT_ff9e5d30,0);
+  return;
+}
+
+
+
+
+##########################################################################
+# FUN_ff9e51d8 - EVF FrameProcessing (mode 1, calls EVFPipelineSetup with mode=4)
+# Address: 0xff9e51d8
+##########################################################################
+
+Function: FUN_ff9e51d8
+Entry: ff9e51d8
+Size: 336 bytes
+
+--- CALLERS ---
+  UNCONDITIONAL_CALL from ff9e5430 in FUN_ff9e5328_FrameProcessing (ff9e5328)
+  Total: 1
+
+--- CALLEES ---
+  ff9e5204 -> ff9e4ef0 = FUN_ff9e4ef0 (ff9e4ef0)
+  ff9e5218 -> ff9e4c20 = FUN_ff9e4c20 (ff9e4c20)
+  ff9e5248 -> ff9e4ec0 = FUN_ff9e4ec0 (ff9e4ec0)
+  ff9e5258 -> ff9e4e7c = FUN_ff9e4e7c (ff9e4e7c)
+  ff9e5260 -> ffa0467c = FUN_ffa0467c (ffa0467c)
+  ff9e5284 -> ffa03618 = EVFPipelineSetup_FFA03618 (ffa03618)
+  ff9e5298 -> ffa02ddc = PipelineConfig_FFA02DDC (ffa02ddc)
+  ff9e52b4 -> ffa0473c = FUN_ffa0473c (ffa0473c)
+  ff9e52c0 -> ff8f70f8 = PipelineScalerConfig2_FF8F70F8 (ff8f70f8)
+  ff9e52c8 -> ff8f7110 = PipelineScalerConfig1_FF8F7110 (ff8f7110)
+  ff9e52d8 -> ff8f7128 = FUN_ff8f7128 (ff8f7128)
+  ff9e52f8 -> ff8efa6c = PipelineRouting_FF8EFA6C (ff8efa6c)
+  ff9e530c -> ff9e4df8 = DMAInterruptSetup_FF9E4DF8 (ff9e4df8)
+  ff9e531c -> ff8efabc = FUN_ff8efabc_JPCORE_RegisterCallback (ff8efabc)
+  Total: 14
+
+--- DECOMPILED CODE ---
+
+void FUN_ff9e51d8(undefined4 param_1,undefined4 param_2,int param_3,undefined4 param_4,
+                 undefined4 param_5,undefined4 param_6)
+
+{
+  undefined4 *puVar1;
+  int iVar2;
+  undefined4 local_6c;
+  undefined4 local_68;
+  undefined4 local_64;
+  undefined4 local_60;
+  undefined1 auStack_5c [16];
+  undefined1 auStack_4c [8];
+  undefined4 local_44;
+  undefined4 local_40;
+  undefined4 local_3c;
+  undefined4 local_38;
+  undefined4 local_34;
+  undefined4 local_30;
+  undefined4 local_2c;
+  undefined4 local_28;
+  undefined1 auStack_24 [24];
+  
+  local_68 = 0;
+  FUN_ff9e4ef0(param_1,param_2,param_3,param_5,param_6,&local_44);
+  FUN_ff9e4c20(auStack_5c,&local_6c,auStack_4c,&local_44);
+  local_3c = 0;
+  local_38 = local_44;
+  local_2c = local_40;
+  local_28 = 0;
+  local_30 = 0;
+  local_34 = 0;
+  FUN_ff9e4ec0(auStack_5c,&local_60,&local_64);
+  FUN_ff9e4e7c(auStack_5c,&local_3c,&local_68);
+  FUN_ffa0467c(3);
+  EVFPipelineSetup_FFA03618(auStack_24,2,local_60,local_68,local_64,&local_3c,auStack_5c);
+  PipelineConfig_FFA02DDC(&local_3c,4,local_6c,auStack_24);
+  puVar1 = DAT_ff9e5d28;
+  *DAT_ff9e5d28 = local_38;
+  puVar1[1] = local_2c;
+  FUN_ffa0473c(5);
+  PipelineScalerConfig2_FF8F70F8(*puVar1,1);
+  PipelineScalerConfig1_FF8F7110(2);
+  FUN_ff8f7128(param_3 != 1);
+  iVar2 = DAT_ff9e4e60;
+  puVar1 = (undefined4 *)(DAT_ff9e4e60 + 100);
+  *(undefined4 *)(DAT_ff9e4e60 + 0x30) = *(undefined4 *)(DAT_ff9e4e60 + 0x60);
+  *(undefined4 *)(iVar2 + 0x34) = *puVar1;
+  PipelineRouting_FF8EFA6C(0,0x11);
+  DMAInterruptSetup_FF9E4DF8(0,DAT_ff9e5d2c,0,1);
+  FUN_ff8efabc_JPCORE_RegisterCallback(0,DAT_ff9e5d30,0);
+  return;
+}
+
+
+
+
+##########################################################################
+# FUN_ff9e6ce8 - Frame delivery/callback dispatch (calls FUN_ff8c335c)
+# Address: 0xff9e6ce8
+##########################################################################
+
+Function: FUN_ff9e6ce8
+Entry: ff9e6ce8
+Size: 216 bytes
+
+--- CALLERS ---
+  UNCONDITIONAL_CALL from ff9e8320 in FUN_ff9e8268 (ff9e8268)
+  Total: 1
+
+--- CALLEES ---
+  ff9e6d00 -> ff8eed74 = FUN_ff8eed74_PipelineStep0 (ff8eed74)
+  ff9e6d20 -> ffa90020 = FUN_ffa90020 (ffa90020)
+  ff9e6d2c -> ff8f2558 = FUN_ff8f2558 (ff8f2558)
+  ff9e6d34 -> ff8f2974 = FUN_ff8f2974 (ff8f2974)
+  ff9e6d54 -> ff9e6530 = XREF_FUN_ff9e6530 (ff9e6530)
+  ff9e6d58 -> ff9e5b00 = FUN_ff9e5b00 (ff9e5b00)
+  ff9e6d5c -> ff9e7e28 = FUN_ff9e7e28 (ff9e7e28)
+  ff9e6d64 -> ff8f0680 = FUN_ff8f0680 (ff8f0680)
+  ff9e6d68 -> ff8f7ed4 = FUN_ff8f7ed4 (ff8f7ed4)
+  ff9e6d70 -> ff8efb14 = FUN_ff8efb14 (ff8efb14)
+  ff9e6d78 -> ff8f27d8 = FUN_ff8f27d8 (ff8f27d8)
+  ff9e6d80 -> ff8f2af4 = FUN_ff8f2af4 (ff8f2af4)
+  ff9e6d88 -> ff8eee24 = FUN_ff8eee24 (ff8eee24)
+  ff9e6d98 -> ff8c3224 = FUN_ff8c3224 (ff8c3224)
+  ff9e6db4 -> ff8c335c = XREF_FUN_ff8c335c (ff8c335c)
+  Total: 15
+
+--- DECOMPILED CODE ---
+
+void FUN_ff9e6ce8(undefined4 param_1,int param_2,int *param_3)
+
+{
+  int iVar1;
+  undefined4 local_30;
+  undefined4 local_2c;
+  undefined1 auStack_28 [8];
+  undefined1 auStack_20 [8];
+  
+  FUN_ff8eed74_PipelineStep0(0x100000);
+  iVar1 = DAT_ff9e6cc4;
+  if (*(int *)(DAT_ff9e6cc4 + 8) == 0) {
+    *(undefined2 *)(param_2 + 0x30) = 0xffff;
+  }
+  FUN_ffa90020(&local_30,param_2 + 0x30);
+  FUN_ff8f2558(0x40000);
+  FUN_ff8f2974(1);
+  XREF_FUN_ff9e6530(auStack_20,auStack_28,&local_2c,param_1,param_2,local_30,param_3);
+  FUN_ff9e5b00();
+  FUN_ff9e7e28();
+  FUN_ff8f0680(*(undefined4 *)(iVar1 + 0x14));
+  FUN_ff8f7ed4();
+  FUN_ff8efb14(*(undefined4 *)(iVar1 + 0x14));
+  FUN_ff8f27d8(0x40000);
+  FUN_ff8f2af4(1);
+  FUN_ff8eee24(0x100000);
+  FUN_ff8c3224(auStack_20,*(undefined4 *)(param_2 + 0x18),2);
+  if (*param_3 == 1) {
+    XREF_FUN_ff8c335c(auStack_28,local_2c);
+  }
+  return;
+}
+
+
+
+
+##########################################################################
+# FUN_ff85d28c - RecordingCallback2 (movie_rec.c state[+0x118])
+# Address: 0xff85d28c
+##########################################################################
+
+Function: FUN_ff85d28c_RecordingCallback2
+Entry: ff85d28c
+Size: 228 bytes
+
+--- CALLERS ---
+  PARAM from ff85d490 in FUN_ff85d3bc (ff85d3bc)
+  PARAM from ff85e0b4 in FUN_ff85e03c_MovieRecordTask (ff85e03c)
+  Total: 2
+
+--- CALLEES ---
+  ff85d2c0 -> ff8eeb6c = FUN_ff8eeb6c (ff8eeb6c)
+  ff85d2d8 -> ff8eebc8 = FUN_ff8eebc8 (ff8eebc8)
+  ff85d2f0 -> ff85e260 = FUN_ff85e260 (ff85e260)
+  ff85d354 -> ff8279ec = FUN_ff8279ec (ff8279ec)
+  Total: 4
+
+--- DECOMPILED CODE ---
+
+int FUN_ff85d28c_RecordingCallback2(void)
+
+{
+  int iVar1;
+  undefined4 uVar2;
+  int iVar3;
+  undefined4 *puVar4;
+  uint uVar5;
+  
+  iVar1 = DAT_ff85d02c;
+  iVar3 = 0;
+  if (*(int *)(DAT_ff85d02c + 0x28) != 0) {
+    if (*(int *)(DAT_ff85d02c + 0x30) == 1) {
+      if (*(int *)(DAT_ff85d02c + 0xc) != 1) {
+        FUN_ff8eeb6c();
+        *(undefined4 *)(iVar1 + 0xc) = 1;
+      }
+    }
+    else if (*(int *)(DAT_ff85d02c + 0xc) == 1) {
+      FUN_ff8eebc8();
+      *(undefined4 *)(iVar1 + 0xc) = 0;
+    }
+    *(undefined4 *)(iVar1 + 0x28) = 0;
+    iVar3 = *(int *)(iVar1 + 0x3c);
+    if (iVar3 != 5) {
+      puVar4 = (undefined4 *)FUN_ff85e260();
+      *puVar4 = 6;
+      uVar2 = DAT_ff85d6a0;
+      iVar3 = *(int *)(iVar1 + 0x38);
+      puVar4[1] = *(undefined4 *)(DAT_ff85d69c + iVar3 * 4);
+      puVar4[2] = *(undefined4 *)(iVar1 + 0x58);
+      puVar4[3] = *(undefined4 *)(iVar1 + 0x5c);
+      puVar4[5] = *(undefined4 *)(iVar1 + 0x60);
+      puVar4[6] = *(undefined4 *)(iVar1 + 100);
+      iVar3 = iVar3 + 1;
+      *(int *)(iVar1 + 0x38) = iVar3;
+      if (3 < iVar3) {
+        *(undefined4 *)(iVar1 + 0x38) = 0;
+      }
+      FUN_ff8279ec(*(undefined4 *)(iVar1 + 0x1c),puVar4,DAT_ff85d690,s_MovieRecorder_c_ff85d018,
+                   uVar2);
+      iVar3 = *(int *)(iVar1 + 0x4c);
+      if (iVar3 == 0) {
+        uVar5 = *(uint *)(iVar1 + 0x18);
+        if (((uVar5 & 1) - 1 & uVar5) != 0) {
+          iVar3 = FUN_ff812340(uVar5 >> 1);
+          if (iVar3 == -1) {
+            switchD_ff8443f8::default(s_KerSem_c_ff827564,DAT_ff827620);
+          }
+          return 0;
+        }
+        return 7;
+      }
+    }
+  }
+  return iVar3;
+}
+
+
+
+
+##########################################################################
+# FUN_ff85d370 - RecordingCallback1 (movie_rec.c state[+0x114])
+# Address: 0xff85d370
+##########################################################################
+
+Function: FUN_ff85d370_RecordingCallback1
+Entry: ff85d370
+Size: 64 bytes
+
+--- CALLERS ---
+  PARAM from ff85d48c in FUN_ff85d3bc (ff85d3bc)
+  PARAM from ff85e0c0 in FUN_ff85e03c_MovieRecordTask (ff85e03c)
+  Total: 2
+
+--- CALLEES ---
+  Total: 0
+
+--- DECOMPILED CODE ---
+
+void FUN_ff85d370_RecordingCallback1(undefined4 *param_1)
+
+{
+  int iVar1;
+  
+  iVar1 = DAT_ff85d02c;
+  *(undefined4 *)(DAT_ff85d69c + *(int *)(DAT_ff85d02c + 0x38) * 4) = *param_1;
+  *(undefined4 *)(iVar1 + 0x58) = param_1[1];
+  *(undefined4 *)(iVar1 + 0x5c) = param_1[2];
+  *(undefined4 *)(iVar1 + 0x60) = param_1[6];
+  *(undefined4 *)(iVar1 + 100) = param_1[3];
+  *(undefined4 *)(iVar1 + 0x28) = 1;
+  return;
+}
+
+
+
+
+=== END ===

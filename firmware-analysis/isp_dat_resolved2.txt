@@ -1,0 +1,71 @@
+========================================================================
+DAT_ Reference Resolution - Phase 2
+Firmware: IXUS 870 IS / SD 880 IS, version 1.01a
+========================================================================
+
+DAT_FFA04960  =>  0xC0F1110C  *** JPCORE Register ***
+DAT_FFA04964  =>  0xC0F11344  *** JPCORE Register ***
+DAT_FFA04968  =>  0xC0F11388  *** JPCORE Register ***
+DAT_FFA0496C  =>  0xC0F1138C  *** JPCORE Register ***
+DAT_FFA04970  =>  0xC0F11394  *** JPCORE Register ***
+DAT_FFA04974  =>  0xC0F1139C  *** JPCORE Register ***
+DAT_FFA04978  =>  0xC0F113BC  *** JPCORE Register ***
+DAT_FFA9A1E0  =>  0x0000E974  RAM
+DAT_FFA9A1E4  =>  0xC0F0D098  *** ISP Register ***
+DAT_FFA9A1E8  =>  0xC0F0D09C  *** ISP Register ***
+DAT_FFA9A1EC  =>  0xC0F0D0A4  *** ISP Register ***
+DAT_FFA9A198  =>  0xC0F0D008  *** ISP Register ***
+DAT_FFA9A19C  =>  0xC0F0D00C  *** ISP Register ***
+DAT_FFA9A1F0  =>  0xC0F0D060  *** ISP Register ***
+DAT_FFA9A1F4  =>  0xC0F0D064  *** ISP Register ***
+DAT_FFA9A1F8  =>  0xC0F0D02C  *** ISP Register ***
+DAT_FF9E8620  =>  0xFFB24000  ROM
+              ->  *0xFFB24000 = 0x01C804C0  RAM
+DAT_FF9E8624  =>  0xDDDD8888  
+DAT_FF9E8628  =>  0xFFB23F44  ROM
+              ->  *0xFFB23F44 = 0x00E404C0  RAM
+DAT_FFA03A60  =>  0x00000FFF  RAM
+DAT_FF9E8238  =>  0x0000B95C  RAM
+DAT_FF9E8234  =>  0x000186A0  RAM
+DAT_FF9E8254  =>  0x0000010E  RAM
+
+========================================================================
+VideoRecPipelineSetup Register Block (DAT_ffa04964 base + 0..6*4)
+========================================================================
+
+Block base: 0xC0F11344  *** JPCORE Register ***
+
+  [0] 0xC0F11344  *** JPCORE Register ***
+  [1] 0xC0F11348  *** JPCORE Register ***
+  [2] 0xC0F1134C  *** JPCORE Register ***
+  [3] 0xC0F11350  *** JPCORE Register ***
+  [4] 0xC0F11354  *** JPCORE Register ***
+  [5] 0xC0F11358  *** JPCORE Register ***
+  [6] 0xC0F1135C  *** JPCORE Register ***
+  [7] 0xC0F11360  *** JPCORE Register ***
+  [8] 0xC0F11364  *** JPCORE Register ***
+  [9] 0xC0F11368  *** JPCORE Register ***
+
+========================================================================
+Resolution Tables
+========================================================================
+
+Mode 4 (EVF) table: 0xFFB24000
+Mode 5 (Rec) table: 0xFFB23F44
+
+Mode 4 entries (4 bytes each = 2x uint16):
+  [0] 0xFFB24000: raw=0x01C804C0  w=1216 h=456
+  [1] 0xFFB24004: raw=0x01C004B0  w=1200 h=448
+  [2] 0xFFB24008: raw=0x01BA04A0  w=1184 h=442
+  [3] 0xFFB2400C: raw=0x01B40490  w=1168 h=436
+Mode 5 entries:
+  [0] 0xFFB23F44: raw=0x00E404C0  w=1216 h=228
+  [1] 0xFFB23F48: raw=0x00DE04A0  w=1184 h=222
+  [2] 0xFFB23F4C: raw=0x00D60478  w=1144 h=214
+  [3] 0xFFB23F50: raw=0x00D00458  w=1112 h=208
+
+========================================================================
+ISPSensorConfig Structure (DAT_ffa9a1e0)
+========================================================================
+
+Structure base: 0x0000E974  RAM

@@ -1,0 +1,171 @@
+========================================================================
+JPCORE Handler & Event Flag Decompilation
+Firmware: IXUS 870 IS / SD 880 IS, version 1.01a
+Purpose: Find where +0x5C is checked and understand sync primitives
+========================================================================
+
+// === FUN_ff849168_JPCORE_Interrupt_Handler @ ff849168 ===
+// Signature: void FUN_ff849168_JPCORE_Interrupt_Handler(undefined4 *param_1);
+
+void FUN_ff849168_JPCORE_Interrupt_Handler(undefined4 *param_1)
+
+{
+  int iVar1;
+  
+  thunk_FUN_ff81056c();
+  iVar1 = DAT_ff84924c;
+  FUN_ff827584(*(undefined4 *)(DAT_ff84924c + 0x1c));
+  if (*(int *)(iVar1 + 0xc) == 1) {
+    (*(code *)*param_1)(param_1[1]);
+  }
+  return;
+}
+
+
+
+
+// === FUN_ff869508_EventFlagOrSemaphore @ ff869508 ===
+// Signature: undefined4 FUN_ff869508_EventFlagOrSemaphore(uint param_1,uint param_2);
+
+undefined4 FUN_ff869508_EventFlagOrSemaphore(uint param_1,uint param_2)
+
+{
+  int iVar1;
+  
+  if ((((param_1 & 1) - 1 & param_1) != 0) &&
+     (iVar1 = FUN_ff812538_EventFlagSet(param_1 >> 1,~param_2,4), iVar1 != -1)) {
+    return 0;
+  }
+  return 7;
+}
+
+
+
+
+// === FUN_ff869330_WaitEventFlagOrSemaphore @ ff869330 ===
+// Signature: undefined4 FUN_ff869330_WaitEventFlagOrSemaphore(uint param_1,undefined4 param_2,int param_3,undefined4 param_4);
+
+undefined4
+FUN_ff869330_WaitEventFlagOrSemaphore
+          (uint param_1,undefined4 param_2,int param_3,undefined4 param_4)
+
+{
+  undefined4 uVar1;
+  int iVar2;
+  undefined4 uStack_1c;
+  int iStack_18;
+  undefined4 uStack_14;
+  
+  uStack_1c = param_2;
+  iStack_18 = param_3;
+  uStack_14 = param_4;
+  if (0 < *(int *)*DAT_ff8693f0) {
+    switchD_ff8443f8::default(s_KerFlag_c_ff8693f4,DAT_ff869404,param_3,param_4,param_1);
+  }
+  if (0 < *DAT_ff869408) {
+    switchD_ff8443f8::default(s_KerFlag_c_ff8693f4,DAT_ff86940c);
+  }
+  if (((param_1 & 1) - 1 & param_1) != 0) {
+    if (param_3 == 0) {
+      uVar1 = 0;
+    }
+    else {
+      uVar1 = FUN_ff826ed0(&iStack_18,param_3);
+    }
+    iVar2 = FUN_ff812588_EventFlagWait(param_1 >> 1,param_2,0,&uStack_1c,uVar1);
+    if (iVar2 == -4) {
+      return 0xb;
+    }
+    if (iVar2 == -2) {
+      return 9;
+    }
+    if (iVar2 == 0) {
+      return 0;
+    }
+    switchD_ff8443f8::default(s_KerFlag_c_ff8693f4,DAT_ff869410);
+  }
+  return 7;
+}
+
+
+
+
+// === FUN_ff8ebb34_JPCOREConfig @ ff8ebb34 ===
+// Signature: void FUN_ff8ebb34_JPCOREConfig(undefined4 param_1);
+
+void FUN_ff8ebb34_JPCOREConfig(undefined4 param_1)
+
+{
+  uint *puVar1;
+  uint *puVar2;
+  uint uVar3;
+  
+  puVar1 = DAT_ff8eae74;
+  *(undefined4 *)(DAT_ff8eaea0 + 8) = 0;
+  FUN_ff822af4(puVar1,0xfffffffe,0);
+  FUN_ff822ac0(puVar1 + 7,param_1);
+  uVar3 = (uint)puVar1 | (uint)puVar1 >> 0x1b;
+  FUN_ff822af4(uVar3,0xfffffeff,0);
+  FUN_ff822af4(uVar3,0xffffffef,0x10);
+  FUN_ff822ac0(puVar1 + 4,3);
+  FUN_ff822ac0(puVar1 + 8,0);
+  FUN_ff822ac0(uVar3 + 0x20);
+  FUN_ff822ac0(puVar1 + 0x5c,1);
+  FUN_ff822ac0(puVar1 + 0x61,1);
+  FUN_ff822ac0(puVar1 + 99,1);
+  FUN_ff822ac0(puVar1 + 0x5e,1);
+  puVar2 = (uint *)((uint)puVar1 & 0x3ffff | 0x340000);
+  uVar3 = *puVar2 & 0xfffffffe | 1;
+  *puVar2 = uVar3;
+  *puVar1 = uVar3;
+  return;
+}
+
+
+
+
+// === FUN_ff8ef7f8_JPCORE_SetOutputBuf @ ff8ef7f8 ===
+// Signature: void FUN_ff8ef7f8_JPCORE_SetOutputBuf(int param_1,uint param_2);
+
+void FUN_ff8ef7f8_JPCORE_SetOutputBuf(int param_1,uint param_2)
+
+{
+  uint *puVar1;
+  
+  puVar1 = (uint *)(*(int *)(DAT_ff8f000c + param_1 * 0xc + 4) + 8);
+  *(uint *)((uint)puVar1 & 0x3ffff | 0x340000) = param_2 & 0xbfffffff;
+  *puVar1 = param_2 & 0xbfffffff;
+  return;
+}
+
+
+
+
+// === FUN_ff8efabc_JPCORE_RegisterCallback @ ff8efabc ===
+// Signature: undefined4 FUN_ff8efabc_JPCORE_RegisterCallback(int param_1,undefined4 param_2,undefined4 param_3);
+
+undefined4 FUN_ff8efabc_JPCORE_RegisterCallback(int param_1,undefined4 param_2,undefined4 param_3)
+
+{
+  undefined4 uVar1;
+  int iVar2;
+  
+  iVar2 = DAT_ff8f0024;
+  *(undefined4 *)(DAT_ff8f0024 + param_1 * 0xc) = param_2;
+  iVar2 = iVar2 + param_1 * 0xc;
+  *(undefined4 *)(iVar2 + 4) = param_3;
+  *(undefined4 *)(iVar2 + 8) = 1;
+  iVar2 = FUN_ff826f0c(*(undefined4 *)(DAT_ff8f000c + param_1 * 0xc),
+                       *(undefined4 *)(DAT_ff8f000c + param_1 * 0xc + 8),param_1);
+  if (iVar2 == 1) {
+    uVar1 = 0;
+  }
+  else {
+    uVar1 = 3;
+  }
+  return uVar1;
+}
+
+
+
+

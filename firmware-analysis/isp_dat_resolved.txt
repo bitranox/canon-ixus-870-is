@@ -1,0 +1,137 @@
+========================================================================
+DAT_ Reference Resolution - ISP Routing Functions
+Firmware: IXUS 870 IS / SD 880 IS, version 1.01a
+========================================================================
+
+DAT Address     Value (hex)   Value (dec)   Interpretation
+-----------     -----------   -----------   --------------
+0xFF9E8250  =>  0x0007228C      467596  RAM
+0xFF8C2E24  =>  0x000070D8       28888  RAM
+0xFF9E5D28  =>  0x0000B91C       47388  RAM
+0xFF9E4E60  =>  0x0000B8BC       47292  RAM
+0xFF9E5D2C  =>  0x0000B8EC       47340  RAM
+0xFF9E5D30  =>  0xFF8C2938  4287375672  ROM
+              ->  *0xFF8C2938 = 0xE92D41F0  
+0xFF8F001C  =>  0xC0F051E0  3236975072  *** ISP Register ***
+0xFF8F0020  =>  0xC0F05000  3236974592  *** ISP Register ***
+0xFFA039E0  =>  0x10000778   268437368  TCM/Cache
+0xFFA039F0  =>  0xC0F111C0  3237024192  *** JPCORE Register ***
+0xFFA039F4  =>  0xC0F110C4  3237023940  *** JPCORE Register ***
+0xFFA039F8  =>  0xC0F111C4  3237024196  *** JPCORE Register ***
+0xFFA039FC  =>  0xC0F111C8  3237024200  *** JPCORE Register ***
+0xFF8C3D04  =>  0x0003F294      258708  RAM
+0xFF9E4E78  =>  0x00072234      467508  RAM
+0xFF8F000C  =>  0xFFAE2FFC  4289605628  ROM
+              ->  *0xFFAE2FFC = 0x00000058  RAM
+0xFF8F0010  =>  0x0001FFFE      131070  RAM
+0xFF9E4E64  =>  0x0000B93C       47420  RAM
+0xFF9E5D0C  =>  0xC0F0D000  3237007360  *** ISP Register ***
+0xFF9E5D10  =>  0xC0F0D004  3237007364  *** ISP Register ***
+0xFF9E5D14  =>  0xC0F0D038  3237007416  *** ISP Register ***
+0xFF9E5D18  =>  0xC0F0D03C  3237007420  *** ISP Register ***
+0xFF9E5D1C  =>  0xC0F0D030  3237007408  *** ISP Register ***
+0xFF9E5D20  =>  0xC0F0D070  3237007472  *** ISP Register ***
+0xFF9E5D24  =>  0xC0F0D074  3237007476  *** ISP Register ***
+0xFFA049C0  =>  0xC0F11008  3237023752  *** JPCORE Register ***
+0xFFA049C4  =>  0xC0F11090  3237023888  *** JPCORE Register ***
+0xFFA049E0  =>  0xC0F11048  3237023816  *** JPCORE Register ***
+0xFFA049E4  =>  0xC0F11150  3237024080  *** JPCORE Register ***
+0xFF8F7310  =>  0xC0F1A00C  3237060620  *** JPCORE Register ***
+0xFF8F730C  =>  0xFFFF0000  4294901760  ROM
+              ->  *0xFFFF0000 = 0xEA000001  
+0xFF8F7314  =>  0xC0F1A008  3237060616  *** JPCORE Register ***
+0xFF8F731C  =>  0xC0F1A014  3237060628  *** JPCORE Register ***
+0xFF8F0024  =>  0x000418E0      268512  RAM
+0xFF841100  =>  0x000021B0        8624  RAM
+
+========================================================================
+PipelineRouting Register Array Resolution
+========================================================================
+
+Base for channels 0-7 (DAT_ff8f0020): 0xC0F05000
+Base for channels 8+ (DAT_ff8f001c):  0xC0F051E0
+
+PipelineRouting(0, 0x11):
+  Register address: base + 0*4 = 0xC0F05000
+  Value written: 0x11
+  Interpretation: *** ISP Register ***
+
+All routing channel registers (base + channel*4):
+  Channel  0: 0xC0F05000  *** ISP Register ***
+  Channel  1: 0xC0F05004  *** ISP Register ***
+  Channel  2: 0xC0F05008  *** ISP Register ***
+  Channel  3: 0xC0F0500C  *** ISP Register ***
+  Channel  4: 0xC0F05010  *** ISP Register ***
+  Channel  5: 0xC0F05014  *** ISP Register ***
+  Channel  6: 0xC0F05018  *** ISP Register ***
+  Channel  7: 0xC0F0501C  *** ISP Register ***
+  Channel  8: 0xC0F05200  *** ISP Register ***
+  Channel  9: 0xC0F05204  *** ISP Register ***
+  Channel 10: 0xC0F05208  *** ISP Register ***
+  Channel 11: 0xC0F0520C  *** ISP Register ***
+  Channel 12: 0xC0F05210  *** ISP Register ***
+  Channel 13: 0xC0F05214  *** ISP Register ***
+  Channel 14: 0xC0F05218  *** ISP Register ***
+  Channel 15: 0xC0F0521C  *** ISP Register ***
+
+========================================================================
+DMA Channel Base Array (DAT_ff8f000c)
+========================================================================
+
+DMA base array at: 0xFFAE2FFC
+  Channel 0 @ 0xFFAE2FFC: [0]=0x00000058 [1]=0xC0F04000 [2]=0xFF8F0720
+    [0] RAM
+    [1] *** ISP Register ***  (register base for DMA config)
+    [2] ROM
+  Channel 1 @ 0xFFAE3008: [0]=0x00000059 [1]=0xC0F04100 [2]=0xFF8F0720
+    [0] RAM
+    [1] *** ISP Register ***  (register base for DMA config)
+    [2] ROM
+  Channel 2 @ 0xFFAE3014: [0]=0x0000005A [1]=0xC0F04200 [2]=0xFF8F0720
+    [0] RAM
+    [1] *** ISP Register ***  (register base for DMA config)
+    [2] ROM
+  Channel 3 @ 0xFFAE3020: [0]=0x0000005B [1]=0xC0F04300 [2]=0xFF8F0720
+    [0] RAM
+    [1] *** ISP Register ***  (register base for DMA config)
+    [2] ROM
+
+========================================================================
+Pipeline Scaler/Resizer Register Addresses
+========================================================================
+
+DAT_FF8F7310 (ScalerConfig2 reg): 0xC0F1A00C  *** JPCORE Register ***
+DAT_FF8F7314 (ScalerConfig1 reg): 0xC0F1A008  *** JPCORE Register ***
+DAT_FF8F731C (FUN_ff8f7128 reg): 0xC0F1A014  *** JPCORE Register ***
+DAT_FF8F730C (ScalerConfig2 base value): 0xFFFF0000  ROM
+
+========================================================================
+Pipeline Mode Registers (FFA046xx / FFA047xx)
+========================================================================
+
+DAT_FFA049C0 (FFA0467C reg1): 0xC0F11008  *** JPCORE Register ***
+DAT_FFA049C4 (FFA0467C reg2): 0xC0F11090  *** JPCORE Register ***
+DAT_FFA049E0 (FFA0473C reg1): 0xC0F11048  *** JPCORE Register ***
+DAT_FFA049E4 (FFA0473C reg2): 0xC0F11150  *** JPCORE Register ***
+
+========================================================================
+ISP Setup Registers (FUN_ff9e4ef0 - called during video rec path)
+========================================================================
+
+DAT_FF9E5D0C (ISP reg (written 0x80000000)): 0xC0F0D000  *** ISP Register ***
+DAT_FF9E5D10 (ISP reg (written 0x1000)): 0xC0F0D004  *** ISP Register ***
+DAT_FF9E5D14 (ISP reg (written 0)): 0xC0F0D038  *** ISP Register ***
+DAT_FF9E5D18 (ISP reg (written 0)): 0xC0F0D03C  *** ISP Register ***
+DAT_FF9E5D1C (ISP reg (written 0x11 or 0x01)): 0xC0F0D030  *** ISP Register ***
+DAT_FF9E5D20 (ISP reg (written 0 or 1)): 0xC0F0D070  *** ISP Register ***
+DAT_FF9E5D24 (ISP reg (written 0x110 or 0x100)): 0xC0F0D074  *** ISP Register ***
+
+========================================================================
+PipelineResizer Registers (FUN_ffa02ddc)
+========================================================================
+
+DAT_FFA039E0 (mode3 special value): 0x10000778  TCM/Cache
+DAT_FFA039F0 (reg (written 1)): 0xC0F111C0  *** JPCORE Register ***
+DAT_FFA039F4 (reg (written param_2)): 0xC0F110C4  *** JPCORE Register ***
+DAT_FFA039F8 (reg (written param_3)): 0xC0F111C4  *** JPCORE Register ***
+DAT_FFA039FC (reg (written uVar3)): 0xC0F111C8  *** JPCORE Register ***

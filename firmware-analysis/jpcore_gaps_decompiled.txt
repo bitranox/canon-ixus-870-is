@@ -1,0 +1,689 @@
+==========================================================================
+JPCORE Hardware Encoder - Gap Function Decompilation
+Firmware: IXUS 870 IS / SD880 IS, version 1.01a
+==========================================================================
+
+##########################################################################
+# JPCORE_DMA_Start - WHY does it return failure? What are prerequisites?
+# Address: 0xff849448
+##########################################################################
+
+Function: XREF_JPCORELiteral_FUN_ff849448_JPCORE_DMA_Start
+Entry: ff849448
+Size: 360 bytes
+Signature: undefined XREF_JPCORELiteral_FUN_ff849448_JPCORE_DMA_Start()
+
+--- CALLERS ---
+  UNCONDITIONAL_CALL from ff8f8e1c in XREF_PS3_Base_FUN_ff8eb574_PipelineStep3 (ff8eb574)
+  Total: 1
+
+--- CALLEES ---
+  ff849470 -> ff81b1cc = default (ff81b1cc)
+  ff8494d0 -> ff8eed74 = FUN_ff8eed74_PipelineStep0 (ff8eed74)
+  ff8494e0 -> ff8ebb34 = FUN_ff8ebb34_JPCOREConfig (ff8ebb34)
+  ff84952c -> ff8ef838 = FUN_ff8ef838 (ff8ef838)
+  ff849534 -> ff8ef930 = FUN_ff8ef930 (ff8ef930)
+  ff849540 -> ff8efa80 = FUN_ff8efa80 (ff8efa80)
+  ff849550 -> ff8efabc = FUN_ff8efabc_JPCORE_RegisterCallback (ff8efabc)
+  ff849558 -> ff8efaf8 = FUN_ff8efaf8 (ff8efaf8)
+  ff849564 -> ff8efa44 = FUN_ff8efa44 (ff8efa44)
+  ff84956c -> ff827460 = FUN_ff827460 (ff827460)
+  ff84957c -> ff81b1cc = default (ff81b1cc)
+  ff849588 -> ff8ef7f8 = FUN_ff8ef7f8_JPCORE_SetOutputBuf (ff8ef7f8)
+  ff849594 -> ff8ef950 = FUN_ff8ef950 (ff8ef950)
+  Total: 13
+
+--- DECOMPILED CODE ---
+
+undefined4
+XREF_JPCORELiteral_FUN_ff849448_JPCORE_DMA_Start
+          (int param_1,undefined4 param_2,undefined4 param_3,undefined4 param_4)
+
+{
+  int *piVar1;
+  undefined4 *puVar2;
+  int iVar3;
+  uint uVar4;
+  int iVar5;
+  undefined4 uVar6;
+  undefined4 local_44;
+  undefined4 local_40;
+  undefined4 local_3c;
+  undefined4 local_38;
+  undefined4 local_34;
+  undefined4 local_30;
+  undefined4 local_2c;
+  undefined4 local_28;
+  undefined4 local_24;
+  undefined4 local_20;
+  undefined4 local_1c;
+  undefined4 local_18;
+  
+  piVar1 = DAT_ff84924c;
+  if (*DAT_ff84924c == 0) {
+    switchD_ff8443f8::default(s_DefMarkMan_c_ff849220,DAT_ff849774);
+  }
+  puVar2 = DAT_ff84976c;
+  iVar3 = *(int *)(DAT_ff849764 + param_1 * 4);
+  iVar5 = 0;
+  if (iVar3 != -1) {
+    iVar5 = DAT_ff849768;
+  }
+  piVar1[10] = iVar3;
+  if (iVar3 != -1) {
+    iVar5 = *(int *)(iVar5 + iVar3 * 4);
+  }
+  *puVar2 = param_3;
+  puVar2[1] = param_4;
+  if (((iVar5 == 1) && (piVar1[5] != -1)) && (piVar1[8] == 0)) {
+    uVar6 = 0;
+    piVar1[4] = puVar2[iVar3 * 2 + 2];
+    piVar1[3] = 1;
+    FUN_ff8eed74_PipelineStep0();
+    FUN_ff8ebb34_JPCOREConfig((int)(char)piVar1[5]);
+    local_2c = *(undefined4 *)(DAT_ff84923c + piVar1[10] * 4);
+    local_40 = 0;
+    local_44 = 0;
+    local_38 = 0;
+    local_24 = 3;
+    local_30 = 0;
+    local_3c = 0;
+    local_34 = 0;
+    local_20 = 0;
+    local_28 = 0;
+    local_1c = 0;
+    local_18 = 0;
+    FUN_ff8ef838(0xb,&local_44);
+    FUN_ff8ef930(0xb);
+    FUN_ff8efa80(0xb,0x40);
+    FUN_ff8efabc_JPCORE_RegisterCallback
+              (0xb,XREF_JPCORELiteral_FUN_ff849168_JPCORE_Interrupt_Handler,DAT_ff84976c);
+    FUN_ff8efaf8(0xb);
+    FUN_ff8efa44(0xb,0);
+    uVar4 = FUN_ff827460(piVar1[7]);
+    if ((uVar4 & 1) != 0) {
+      switchD_ff8443f8::default(s_DefMarkMan_c_ff849220,DAT_ff849778);
+    }
+    FUN_ff8ef7f8_JPCORE_SetOutputBuf(0xb,piVar1[4]);
+    FUN_ff8ef950(0xb,2);
+  }
+  else {
+    uVar6 = 1;
+    piVar1[3] = 0;
+  }
+  return uVar6;
+}
+
+
+
+
+##########################################################################
+# JPCORE_FrameComplete - callback fired when JPCORE encoding completes
+# Address: 0xff8f8ce8
+##########################################################################
+
+Function: FUN_ff8f8ce8_JPCORE_FrameComplete
+Entry: ff8f8ce8
+Size: 1 bytes
+Signature: undefined FUN_ff8f8ce8_JPCORE_FrameComplete()
+
+--- CALLERS ---
+  PARAM from ff8f8e18 in XREF_PS3_Base_FUN_ff8eb574_PipelineStep3 (ff8eb574)
+  Total: 1
+
+--- CALLEES ---
+  Total: 0
+
+--- DECOMPILED CODE ---
+
+/* WARNING: Removing unreachable block (ram,0xff8ef978) */
+/* WARNING: Removing unreachable block (ram,0xff8ef96c) */
+/* WARNING: Removing unreachable block (ram,0xff8ef970) */
+/* WARNING: Removing unreachable block (ram,0xff8ef97c) */
+/* WARNING: Removing unreachable block (ram,0xff8ef980) */
+/* WARNING: Removing unreachable block (ram,0xff8ef99c) */
+
+void FUN_ff8f8ce8_JPCORE_FrameComplete(void)
+
+{
+  int iVar1;
+  int iVar2;
+  undefined4 *puVar3;
+  uint uVar4;
+  
+  iVar1 = DAT_ff8f9028;
+  uVar4 = *(uint *)(DAT_ff8f9028 + 0xc) | 1;
+  *(uint *)(DAT_ff8f9028 + 0xc) = uVar4;
+  if (uVar4 != 7) {
+    return;
+  }
+  *(undefined4 *)(iVar1 + 0xc) = 0;
+  if (*(int *)(iVar1 + 0x10) == 1) {
+    *(undefined4 *)(iVar1 + 0xc) = 1;
+  }
+  if (*(int *)(iVar1 + 0x14) == 1) {
+    *(uint *)(iVar1 + 0xc) = *(uint *)(iVar1 + 0xc) | 2;
+  }
+  if (*(int *)(iVar1 + 0x18) == 1) {
+    *(uint *)(iVar1 + 0xc) = *(uint *)(iVar1 + 0xc) | 4;
+  }
+  iVar1 = DAT_ff84924c;
+  if (*(int *)(DAT_ff84924c + 0xc) != 1) {
+    return;
+  }
+  iVar2 = FUN_ff827460(*(undefined4 *)(DAT_ff84924c + 0x1c));
+  if (iVar2 != 0) {
+    return;
+  }
+  FUN_ff8ef7f8_JPCORE_SetOutputBuf(0xb,*(undefined4 *)(iVar1 + 0x10));
+  iVar1 = DAT_ff8f000c;
+  FUN_ff822af4(*(int *)(DAT_ff8f000c + 0x88) + 4,0xfff8ffff,0x20000);
+  puVar3 = *(undefined4 **)(iVar1 + 0x88);
+  *(undefined4 *)((uint)puVar3 & 0x3ffff | 0x340000) = 1;
+  *puVar3 = 1;
+  return;
+}
+
+
+
+
+##########################################################################
+# Video-mode init FUN_ff8eeb6c - called only for modes 2/3 during EVF setup
+# Address: 0xff8eeb6c
+##########################################################################
+
+Function: FUN_ff8eeb6c
+Entry: ff8eeb6c
+Size: 92 bytes
+Signature: undefined FUN_ff8eeb6c()
+
+--- CALLERS ---
+  UNCONDITIONAL_CALL from ff8c3804 in FUN_ff8c3764 (ff8c3764)
+  UNCONDITIONAL_CALL from ff8c36ec in FUN_ff8c35f8 (ff8c35f8)
+  UNCONDITIONAL_CALL from ff8c2db8 in FUN_ff8c2b7c (ff8c2b7c)
+  UNCONDITIONAL_CALL from ff8c319c in FUN_ff8c2ed8_EVFSetupInner (ff8c2ed8)
+  UNCONDITIONAL_CALL from ff85d2c0 in FUN_ff85d28c_RecordingCallback2 (ff85d28c)
+  UNCONDITIONAL_CALL from ff8c431c in FUN_ff8644bc (ff8644bc)
+  UNCONDITIONAL_CALL from ffa3c488 in FUN_ffa3c44c (ffa3c44c)
+  Total: 7
+
+--- CALLEES ---
+  ff8eeb88 -> ff8274b4 = FUN_ff8274b4 (ff8274b4)
+  ff8eeb9c -> ff815288 = FUN_ff815288 (ff815288)
+  ff8eeba8 -> ff8152e8 = FUN_ff8152e8 (ff8152e8)
+  ff8eebac -> ff8ef6b4 = FUN_ff8ef6b4 (ff8ef6b4)
+  Total: 4
+
+--- DECOMPILED CODE ---
+
+undefined4 FUN_ff8eeb6c(undefined4 param_1,undefined4 param_2,undefined4 param_3,undefined4 param_4)
+
+{
+  int *piVar1;
+  int iVar2;
+  uint uVar3;
+  undefined4 unaff_r4;
+  undefined4 in_lr;
+  
+  piVar1 = DAT_ff8eec70;
+  if (*DAT_ff8eec70 == 0) {
+    return 0;
+  }
+  FUN_ff8274b4(DAT_ff8eec70[1],0);
+  if (piVar1[5] == 0) {
+    FUN_ff815288(0);
+    if (piVar1[4] == 0) {
+      FUN_ff8152e8();
+    }
+    FUN_ff8ef6b4();
+  }
+  piVar1[5] = piVar1[5] + 1;
+  uVar3 = piVar1[1];
+  if (((uVar3 & 1) - 1 & uVar3) != 0) {
+    iVar2 = FUN_ff812340(uVar3 >> 1);
+    if (iVar2 == -1) {
+      switchD_ff8443f8::default(s_KerSem_c_ff827564,DAT_ff827620,param_3,param_4,unaff_r4,in_lr);
+    }
+    return 0;
+  }
+  return 7;
+}
+
+
+
+
+##########################################################################
+# Callback execution FUN_ff8c335c - calls recording callbacks at state[+0x114]
+# Address: 0xff8c335c
+##########################################################################
+
+Function: XREF_FUN_ff8c335c
+Entry: ff8c335c
+Size: 148 bytes
+Signature: undefined XREF_FUN_ff8c335c()
+
+--- CALLERS ---
+  CONDITIONAL_CALL from ff9e6db4 in FUN_ff9e6ce8 (ff9e6ce8)
+  Total: 1
+
+--- CALLEES ---
+  ff8c3394 -> ff8416c8 = FUN_ff8416c8 (ff8416c8)
+  Total: 1
+
+--- DECOMPILED CODE ---
+
+void XREF_FUN_ff8c335c(undefined4 *param_1,undefined4 param_2,undefined4 param_3,undefined4 param_4)
+
+{
+  int iVar1;
+  int iVar2;
+  undefined4 uVar3;
+  bool bVar4;
+  
+  iVar1 = DAT_ff8c2e24;
+  iVar2 = *(int *)(DAT_ff8c2e24 + 0xf0);
+  bVar4 = iVar2 == 1;
+  if (bVar4) {
+    iVar2 = *(int *)(DAT_ff8c2e24 + 0x48);
+  }
+  if (bVar4 && iVar2 == 1) {
+    if (*(undefined4 **)(DAT_ff8c2e24 + 0x6c) != (undefined4 *)0x0) {
+      **(undefined4 **)(DAT_ff8c2e24 + 0x6c) = param_3;
+      uVar3 = FUN_ff8416c8();
+      iVar2 = *(int *)(iVar1 + 0x6c);
+      *(undefined4 *)(iVar2 + 0x10) = uVar3;
+      *(undefined4 *)(iVar2 + 0x14) = param_4;
+      *(undefined4 *)(iVar2 + 0x18) = param_4;
+      *(undefined4 *)(iVar2 + 4) = *param_1;
+      *(undefined4 *)(iVar2 + 0xc) = param_2;
+      *(undefined4 *)(iVar2 + 8) = param_1[1];
+    }
+    if (*(code **)(iVar1 + 0x114) != (code *)0x0) {
+      (**(code **)(iVar1 + 0x114))(*(undefined4 *)(iVar1 + 0x6c));
+    }
+    if (*(code **)(iVar1 + 0x118) != (code *)0x0) {
+      (**(code **)(iVar1 + 0x118))();
+    }
+  }
+  iVar2 = DAT_ff8c3d04;
+  *(undefined4 *)(DAT_ff8c3d04 + 4) = *param_1;
+  *(undefined4 *)(iVar2 + 8) = param_1[1];
+  return;
+}
+
+
+
+
+##########################################################################
+# Pipeline stage check FUN_ff8eaa10 - guards PipelineStep3 entry
+# Address: 0xff8eaa10
+##########################################################################
+
+Function: FUN_ff8eaa10
+Entry: ff8eaa10
+Size: 104 bytes
+Signature: undefined FUN_ff8eaa10()
+
+--- CALLERS ---
+  UNCONDITIONAL_CALL from ff8eb58c in XREF_PS3_Base_FUN_ff8eb574_PipelineStep3 (ff8eb574)
+  UNCONDITIONAL_CALL from ff8eb59c in XREF_PS3_Base_FUN_ff8eb574_PipelineStep3 (ff8eb574)
+  UNCONDITIONAL_CALL from ff8eb5ac in XREF_PS3_Base_FUN_ff8eb574_PipelineStep3 (ff8eb574)
+  UNCONDITIONAL_CALL from ff8eb5bc in XREF_PS3_Base_FUN_ff8eb574_PipelineStep3 (ff8eb574)
+  UNCONDITIONAL_CALL from ff8eb5cc in XREF_PS3_Base_FUN_ff8eb574_PipelineStep3 (ff8eb574)
+  UNCONDITIONAL_CALL from ff8eb5dc in XREF_PS3_Base_FUN_ff8eb574_PipelineStep3 (ff8eb574)
+  UNCONDITIONAL_CALL from ff8eb5ec in XREF_PS3_Base_FUN_ff8eb574_PipelineStep3 (ff8eb574)
+  UNCONDITIONAL_CALL from ff8eb5fc in XREF_PS3_Base_FUN_ff8eb574_PipelineStep3 (ff8eb574)
+  UNCONDITIONAL_CALL from ff8eb60c in XREF_PS3_Base_FUN_ff8eb574_PipelineStep3 (ff8eb574)
+  UNCONDITIONAL_CALL from ff8ec6ac in FUN_ff8ec694 (ff8ec694)
+  UNCONDITIONAL_CALL from ff8ec6bc in FUN_ff8ec694 (ff8ec694)
+  UNCONDITIONAL_CALL from ff8ec9ac in FUN_ff8ec98c (ff8ec98c)
+  UNCONDITIONAL_CALL from ff8ec9bc in FUN_ff8ec98c (ff8ec98c)
+  UNCONDITIONAL_CALL from ff8ebd8c in FUN_ff8ebd74 (ff8ebd74)
+  UNCONDITIONAL_CALL from ff8ebd9c in FUN_ff8ebd74 (ff8ebd74)
+  UNCONDITIONAL_CALL from ff8ebdac in FUN_ff8ebd74 (ff8ebd74)
+  UNCONDITIONAL_CALL from ff8ebdbc in FUN_ff8ebd74 (ff8ebd74)
+  UNCONDITIONAL_CALL from ff8ebdcc in FUN_ff8ebd74 (ff8ebd74)
+  UNCONDITIONAL_CALL from ff8ebddc in FUN_ff8ebd74 (ff8ebd74)
+  UNCONDITIONAL_CALL from ff8ebdec in FUN_ff8ebd74 (ff8ebd74)
+  UNCONDITIONAL_CALL from ff8ebdfc in FUN_ff8ebd74 (ff8ebd74)
+  UNCONDITIONAL_CALL from ff8ec7a4 in FUN_ff8ec794 (ff8ec794)
+  UNCONDITIONAL_CALL from ff8ec880 in FUN_ff9dde80 (ff9dde80)
+  UNCONDITIONAL_CALL from ff8eca9c in FUN_ff8eca8c (ff8eca8c)
+  UNCONDITIONAL_CALL from ff8ecaac in FUN_ff8eca8c (ff8eca8c)
+  UNCONDITIONAL_CALL from ff8ecabc in FUN_ff8eca8c (ff8eca8c)
+  UNCONDITIONAL_CALL from ff8ecacc in FUN_ff8eca8c (ff8eca8c)
+  UNCONDITIONAL_CALL from ff8ecadc in FUN_ff8eca8c (ff8eca8c)
+  UNCONDITIONAL_CALL from ff8ecd14 in XREF_PS3_CompletionMask_FUN_ff8eccfc (ff8eccfc)
+  UNCONDITIONAL_CALL from ff8ecd24 in XREF_PS3_CompletionMask_FUN_ff8eccfc (ff8eccfc)
+  UNCONDITIONAL_CALL from ff8ecd34 in XREF_PS3_CompletionMask_FUN_ff8eccfc (ff8eccfc)
+  UNCONDITIONAL_CALL from ff8ecd44 in XREF_PS3_CompletionMask_FUN_ff8eccfc (ff8eccfc)
+  UNCONDITIONAL_CALL from ff8ecd54 in XREF_PS3_CompletionMask_FUN_ff8eccfc (ff8eccfc)
+  UNCONDITIONAL_CALL from ff8ecd64 in XREF_PS3_CompletionMask_FUN_ff8eccfc (ff8eccfc)
+  Total: 34
+
+--- CALLEES ---
+  ff8eaa30 -> ff8274b4 = FUN_ff8274b4 (ff8274b4)
+  ff8eaa58 -> ff827584 = FUN_ff827584 (ff827584)
+  ff8eaa6c -> ff8274b4 = FUN_ff8274b4 (ff8274b4)
+  Total: 3
+
+--- DECOMPILED CODE ---
+
+bool FUN_ff8eaa10(int param_1,int param_2)
+
+{
+  undefined4 uVar1;
+  int iVar2;
+  int iVar3;
+  int iVar4;
+  
+  iVar2 = DAT_ff8eaea0;
+  uVar1 = DAT_ff8eae9c;
+  FUN_ff8274b4(*(undefined4 *)(DAT_ff8eaea0 + 4),DAT_ff8eae9c);
+  iVar4 = DAT_ff8eaea4 + param_1 * 0x28;
+  iVar3 = *(int *)(iVar4 + param_2 * 4) + 1;
+  *(int *)(iVar4 + param_2 * 4) = iVar3;
+  FUN_ff827584(*(undefined4 *)(iVar2 + 4));
+  if (iVar3 == 1) {
+    FUN_ff8274b4(*(undefined4 *)(DAT_ff8eaea8 + param_1 * 4),uVar1);
+  }
+  return iVar3 == 1;
+}
+
+
+
+
+##########################################################################
+# PipelineStep3 helper FUN_ff8ead78 - DMA address setup?
+# Address: 0xff8ead78
+##########################################################################
+
+Function: FUN_ff8ead78
+Entry: ff8ead78
+Size: 216 bytes
+Signature: undefined FUN_ff8ead78()
+
+--- CALLERS ---
+  UNCONDITIONAL_CALL from ff8eb6e0 in XREF_PS3_Base_FUN_ff8eb574_PipelineStep3 (ff8eb574)
+  UNCONDITIONAL_CALL from ff8ec700 in FUN_ff8ec694 (ff8ec694)
+  UNCONDITIONAL_CALL from ff8ec9f8 in FUN_ff8ec98c (ff8ec98c)
+  Total: 3
+
+--- CALLEES ---
+  ff8ead98 -> ff822af4 = FUN_ff822af4 (ff822af4)
+  ff8eada8 -> ff822af4 = FUN_ff822af4 (ff822af4)
+  ff8eadbc -> ff822af4 = FUN_ff822af4 (ff822af4)
+  ff8eadcc -> ff822af4 = FUN_ff822af4 (ff822af4)
+  ff8eadd8 -> ff822ac0 = FUN_ff822ac0 (ff822ac0)
+  ff8eade4 -> ff822ac0 = FUN_ff822ac0 (ff822ac0)
+  ff8eadfc -> ff822ac0 = FUN_ff822ac0 (ff822ac0)
+  ff8eae08 -> ff822ac0 = FUN_ff822ac0 (ff822ac0)
+  ff8eae18 -> ff822ac0 = FUN_ff822ac0 (ff822ac0)
+  ff8eae24 -> ff822ac0 = FUN_ff822ac0 (ff822ac0)
+  ff8eae34 -> ff822ac0 = FUN_ff822ac0 (ff822ac0)
+  Total: 11
+
+--- DECOMPILED CODE ---
+
+void FUN_ff8ead78(int param_1,int param_2,int param_3)
+
+{
+  int iVar1;
+  uint uVar2;
+  uint *puVar3;
+  
+  iVar1 = DAT_ff8eae6c;
+  FUN_ff822af4(DAT_ff8eae6c,0x7fffffff,0x80000000);
+  FUN_ff822af4(iVar1,0x7fffffff,0);
+  uVar2 = iVar1 + 8;
+  FUN_ff822af4(uVar2,0xffffffef,0);
+  FUN_ff822af4(uVar2,0xfffffeff,0x100);
+  FUN_ff822ac0(uVar2 | uVar2 >> 0x1c,0);
+  FUN_ff822ac0(iVar1 + 0x14,0);
+  FUN_ff822ac0(iVar1 + 0x10,DAT_ff8eaed4 + param_2 * 0x10000 | param_1 - 1U);
+  FUN_ff822ac0(iVar1 + 0x1c,0);
+  FUN_ff822ac0(iVar1 + 0x2c,1);
+  FUN_ff822ac0(iVar1 + 0x2c,1);
+  puVar3 = (uint *)(iVar1 + 0x214);
+  FUN_ff822ac0(puVar3,1);
+  *(uint *)((uint)puVar3 & 0x3ffff | 0x340000) = (uint)(param_3 != 1);
+  *puVar3 = (uint)(param_3 != 1);
+  return;
+}
+
+
+
+
+##########################################################################
+# PipelineStep3 helper FUN_ff8eafc0 - post-DMA config?
+# Address: 0xff8eafc0
+##########################################################################
+
+Function: FUN_ff8eafc0
+Entry: ff8eafc0
+Size: 168 bytes
+Signature: undefined FUN_ff8eafc0()
+
+--- CALLERS ---
+  UNCONDITIONAL_CALL from ff8eb6f4 in XREF_PS3_Base_FUN_ff8eb574_PipelineStep3 (ff8eb574)
+  UNCONDITIONAL_CALL from ff8ecb60 in FUN_ff8eca8c (ff8eca8c)
+  Total: 2
+
+--- CALLEES ---
+  ff8eafd8 -> ff822af4 = FUN_ff822af4 (ff822af4)
+  ff8eafe8 -> ff822af4 = FUN_ff822af4 (ff822af4)
+  ff8eaffc -> ff822af4 = FUN_ff822af4 (ff822af4)
+  ff8eb00c -> ff822af4 = FUN_ff822af4 (ff822af4)
+  ff8eb01c -> ff822af4 = FUN_ff822af4 (ff822af4)
+  ff8eb028 -> ff822ac0 = FUN_ff822ac0 (ff822ac0)
+  ff8eb034 -> ff822ac0 = FUN_ff822ac0 (ff822ac0)
+  ff8eb040 -> ff822ac0 = FUN_ff822ac0 (ff822ac0)
+  ff8eb04c -> ff822ac0 = FUN_ff822ac0 (ff822ac0)
+  Total: 9
+
+--- DECOMPILED CODE ---
+
+void FUN_ff8eafc0(int param_1)
+
+{
+  uint uVar1;
+  uint uVar2;
+  
+  uVar1 = DAT_ff8eae58;
+  FUN_ff822af4(DAT_ff8eae58,0x7fffffff,0x80000000);
+  FUN_ff822af4(uVar1,0x7fffffff,0);
+  uVar2 = uVar1 | 4;
+  FUN_ff822af4(uVar2,0xffffefff);
+  FUN_ff822af4(uVar2,0xfffffeff,0);
+  FUN_ff822af4(uVar2,0xffffffef,0);
+  FUN_ff822ac0(uVar2 + 4,0);
+  FUN_ff822ac0(uVar2 | uVar1 >> 0x1c,0);
+  FUN_ff822ac0(uVar2 + 0xc,0x100);
+  FUN_ff822ac0(uVar2 + 0x268,0);
+  *(uint *)(uVar2 + 0x284 & 0x3ffff | 0x340000) = (uint)(param_1 != 1);
+  *(uint *)(uVar2 + 0x284) = (uint)(param_1 != 1);
+  return;
+}
+
+
+
+
+##########################################################################
+# PipelineStep3 post-DMA FUN_ffa08764
+# Address: 0xffa08764
+##########################################################################
+
+Function: FUN_ffa08764
+Entry: ffa08764
+Size: 300 bytes
+Signature: undefined FUN_ffa08764()
+
+--- CALLERS ---
+  UNCONDITIONAL_CALL from ff8f8e2c in XREF_PS3_Base_FUN_ff8eb574_PipelineStep3 (ff8eb574)
+  Total: 1
+
+--- CALLEES ---
+  ffa087c8 -> ff81b1cc = default (ff81b1cc)
+  ffa08804 -> ff8f2438 = FUN_ff8f2438 (ff8f2438)
+  ffa0880c -> ff8f2558 = FUN_ff8f2558 (ff8f2558)
+  ffa08820 -> ff81b1cc = default (ff81b1cc)
+  ffa0883c -> ffad1878 = FUN_ffad1878 (ffad1878)
+  ffa08844 -> ffa086c8 = FUN_ffa086c8 (ffa086c8)
+  ffa0884c -> ff8eb894 = FUN_ff8eb894 (ff8eb894)
+  Total: 7
+
+--- DECOMPILED CODE ---
+
+undefined4 FUN_ffa08764(int param_1)
+
+{
+  int iVar1;
+  int iVar2;
+  undefined4 uVar3;
+  undefined1 auStack_20 [20];
+  
+  iVar1 = DAT_ffa089c8;
+  iVar2 = param_1;
+  if (((param_1 == 5 || param_1 == 8) || param_1 == 0xf) || param_1 == 0x13) {
+    iVar2 = 0;
+  }
+  if (((param_1 != 5 && param_1 != 8) && param_1 != 0xf) && param_1 != 0x13) {
+    if ((((param_1 == 4 || param_1 == 0x10) || param_1 == 7) || param_1 == 0xe) || param_1 == 9) {
+      iVar2 = 1;
+    }
+    if ((((param_1 != 4 && param_1 != 0x10) && param_1 != 7) && param_1 != 0xe) && param_1 != 9) {
+      if (param_1 == 6) {
+        iVar2 = 2;
+      }
+      else {
+        iVar2 = -1;
+      }
+    }
+  }
+  *(int *)(DAT_ffa089c8 + 0x2c) = iVar2;
+  if (*(int *)(iVar1 + 0x20) == 0) {
+    switchD_ff8443f8::default(s_SumiaMan_c_ffa089cc,0xf7);
+  }
+  if ((*(int *)(iVar1 + 0x2c) == -1) || (*(int *)(iVar1 + 0x24) != 0)) {
+    *(undefined4 *)(iVar1 + 0x28) = 0;
+    return 1;
+  }
+  if (param_1 == 7) {
+LAB_ffa08870:
+    uVar3 = 0;
+  }
+  else {
+    if (param_1 < 8) {
+      if (param_1 == 4) goto LAB_ffa08870;
+      if (param_1 == 6) {
+        uVar3 = 5;
+        goto LAB_ffa08804;
+      }
+    }
+    else if (param_1 == 9 || param_1 == 0x13) goto LAB_ffa08870;
+    uVar3 = 7;
+  }
+LAB_ffa08804:
+  FUN_ff8f2438(uVar3);
+  FUN_ff8f2558(0x40);
+  if (2 < *(uint *)(iVar1 + 0x2c)) {
+    switchD_ff8443f8::default(s_SumiaMan_c_ffa089cc,DAT_ffa089d8);
+  }
+  FUN_ffad1878(auStack_20,DAT_ffa089dc + *(int *)(iVar1 + 0x2c) * 0x12,0x12);
+  FUN_ffa086c8((int)*(short *)(iVar1 + 0x1c));
+  FUN_ff8eb894(auStack_20);
+  *(undefined4 *)(iVar1 + 0x28) = 1;
+  return *(undefined4 *)(iVar1 + 0x24);
+}
+
+
+
+
+##########################################################################
+# PipelineStep3 post-DMA FUN_ffa08d40
+# Address: 0xffa08d40
+##########################################################################
+
+Function: FUN_ffa08d40
+Entry: ffa08d40
+Size: 308 bytes
+Signature: undefined FUN_ffa08d40()
+
+--- CALLERS ---
+  UNCONDITIONAL_CALL from ff8f8e34 in XREF_PS3_Base_FUN_ff8eb574_PipelineStep3 (ff8eb574)
+  Total: 1
+
+--- CALLEES ---
+  ffa08dc8 -> ff81b1cc = default (ff81b1cc)
+  ffa08dcc -> ff84b864 = FUN_ff84b864 (ff84b864)
+  ffa08dd4 -> ff84ac74 = FUN_ff84ac74 (ff84ac74)
+  ffa08e18 -> ffa08c68 = FUN_ffa08c68 (ffa08c68)
+  ffa08e50 -> ff8eb7bc = FUN_ff8eb7bc (ff8eb7bc)
+  Total: 5
+
+--- DECOMPILED CODE ---
+
+undefined4 FUN_ffa08d40(int param_1)
+
+{
+  int iVar1;
+  undefined4 *puVar2;
+  undefined4 uVar3;
+  int unaff_r4;
+  int iVar4;
+  int iVar5;
+  int local_30;
+  int local_2c;
+  int local_28;
+  undefined4 local_24;
+  undefined4 local_20;
+  undefined4 local_1c;
+  
+  iVar1 = DAT_ffa08fd4;
+  if ((param_1 == 5 || param_1 == 8) || param_1 == 0x13) {
+    unaff_r4 = 0;
+  }
+  if ((param_1 != 5 && param_1 != 8) && param_1 != 0x13) {
+    if (param_1 == 9) {
+      unaff_r4 = 2;
+    }
+    else if (param_1 == 4 || param_1 == 0x10) {
+      unaff_r4 = 1;
+    }
+    else {
+      unaff_r4 = -1;
+    }
+  }
+  puVar2 = (undefined4 *)(DAT_ffa08fe0 + unaff_r4 * 8);
+  local_20 = *puVar2;
+  local_1c = puVar2[1];
+  local_24 = *(undefined4 *)(DAT_ffa08fe4 + unaff_r4 * 4);
+  local_28 = 0;
+  local_2c = 0;
+  iVar4 = *(int *)(DAT_ffa08fe8 + unaff_r4 * 4);
+  iVar5 = *(int *)(DAT_ffa08fe8 + 0xc + unaff_r4 * 4);
+  if (*(int *)(DAT_ffa08fd4 + 8) == 0) {
+    switchD_ff8443f8::default(s_RshdMan_c_ffa08fec,0x110);
+  }
+  uVar3 = FUN_ff84b864();
+  FUN_ff84ac74(uVar3,&local_30);
+  if (((unaff_r4 == -1) || (*(int *)(iVar1 + 0x28) != 0)) || (*(short *)(local_30 + 6) == 0)) {
+    uVar3 = 1;
+    *(undefined4 *)(iVar1 + 0x10) = 0;
+  }
+  else {
+    local_28 = (int)*(short *)(local_30 + 8);
+    local_2c = (int)*(short *)(local_30 + 10);
+    FUN_ffa08c68(&local_28,&local_2c,0x77);
+    FUN_ff8eb7bc(&local_20,&local_24,(0x738 - iVar4) + local_28 & 0xffff,
+                 (0x570 - iVar5) + local_2c & 0xffff);
+    *(undefined4 *)(iVar1 + 0x10) = 1;
+    uVar3 = 0;
+  }
+  return uVar3;
+}
+
+
+
+
+=== END ===

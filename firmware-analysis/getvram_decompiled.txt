@@ -1,0 +1,394 @@
+========================================================================
+GetContinuousMovieJpegVRAMData Deep Dive
+Firmware: IXUS 870 IS / SD 880 IS, version 1.01a
+Purpose: Understand full DMA flow and why VRAM buffer stays empty
+========================================================================
+
+// === GetContinuousMovieJpegVRAMData_FW @ ffaa234c ===
+// Signature: uint GetContinuousMovieJpegVRAMData_FW(undefined4 *param_1,undefined4 param_2,undefined4 param_3,undefined4 param_4);
+
+uint GetContinuousMovieJpegVRAMData_FW
+               (undefined4 *param_1,undefined4 param_2,undefined4 param_3,undefined4 param_4)
+
+{
+  undefined4 *puVar1;
+  uint uVar2;
+  undefined4 uVar3;
+  undefined4 uStack_18;
+  undefined4 uStack_14;
+  
+  puVar1 = DAT_ffaa1bb8;
+  uVar3 = *param_1;
+  uStack_18 = param_3;
+  uStack_14 = param_4;
+  FUN_ff869508_semaphore_signal(*DAT_ffaa1bb8,1);
+  uVar2 = FUN_ffaa2224_GetContMovJpeg_inner(uVar3,&uStack_18,LAB_ffaa12b0_callback,0);
+  if ((uVar2 & 1) == 0) {
+    FUN_ff869330_semaphore_func(*puVar1,1,0);
+    StopContinuousVRAMData_FW();
+  }
+  return uVar2;
+}
+
+
+
+
+// === FUN_ffaa2224_Inner_GetContMovJpeg @ ffaa2224 ===
+// Signature: undefined4 FUN_ffaa2224_Inner_GetContMovJpeg(uint param_1,undefined4 *param_2,code *param_3,undefined4 param_4);
+
+undefined4
+FUN_ffaa2224_Inner_GetContMovJpeg(uint param_1,undefined4 *param_2,code *param_3,undefined4 param_4)
+
+{
+  undefined4 uVar1;
+  int iVar2;
+  
+  iVar2 = FUN_ff8c4288_MjpegActiveCheck();
+  if (iVar2 != 1) {
+    return 0x11;
+  }
+  if (param_1 < 0x1f) {
+    FUN_ff8c4208_DMA_trigger(param_1,param_3,param_4);
+    uVar1 = DAT_ffaa2318;
+    *param_2 = DAT_ffaa2314;
+    param_2[1] = uVar1;
+    FUN_ff8fb36c(s_MJVRAM_Address____p_ffaa231c);
+    FUN_ff8fb36c(s_MJVRAM_Size___0x_x_ffaa2334,param_2[1]);
+    return 0;
+  }
+  (*param_3)(param_4);
+  return 3;
+}
+
+
+
+
+// === StopContinuousVRAMData_FW @ ff8c425c ===
+// Signature: undefined4 StopContinuousVRAMData_FW(undefined4 param_1,undefined4 param_2,undefined4 param_3,undefined4 param_4);
+
+/* WARNING: Removing unreachable block (ram,0xff827518) */
+
+undefined4
+StopContinuousVRAMData_FW
+          (undefined4 param_1,undefined4 param_2,undefined4 param_3,undefined4 param_4)
+
+{
+  int iVar1;
+  uint uVar2;
+  
+  iVar1 = DAT_ff8c43f4;
+  *(undefined4 *)(DAT_ff8c43f4 + 0xa0) = 0;
+  *(undefined4 *)(iVar1 + 0x120) = 0;
+  *(undefined4 *)(iVar1 + 0xa4) = 0;
+  *(undefined4 *)(iVar1 + 0x54) = 0;
+  *(undefined4 *)(iVar1 + 0x5c) = 4;
+  uVar2 = *(uint *)(iVar1 + 0xb8);
+  if (0 < *(int *)*DAT_ff827560) {
+    switchD_ff8443f8::default(s_KerSem_c_ff827564,DAT_ff827574,param_3,param_4,param_3,param_4);
+  }
+  if (0 < *DAT_ff827578) {
+    switchD_ff8443f8::default(s_KerSem_c_ff827564,DAT_ff82757c);
+  }
+  if (((uVar2 & 1) - 1 & uVar2) != 0) {
+    iVar1 = FUN_ff812374(uVar2 >> 1,0);
+    if (iVar1 == -4) {
+      return 0xb;
+    }
+    if (iVar1 == -2) {
+      return 9;
+    }
+    if (iVar1 == 0) {
+      return 0;
+    }
+    switchD_ff8443f8::default(s_KerSem_c_ff827564,DAT_ff827580);
+  }
+  return 7;
+}
+
+
+
+
+// === FUN_ff8c3d38_StartMjpegMaking_Inner @ ff8c3d38 ===
+// Signature: undefined4 FUN_ff8c3d38_StartMjpegMaking_Inner(undefined4 param_1,undefined4 param_2,undefined4 param_3,undefined4 param_4);
+
+undefined4
+FUN_ff8c3d38_StartMjpegMaking_Inner
+          (undefined4 param_1,undefined4 param_2,undefined4 param_3,undefined4 param_4)
+
+{
+  int iVar1;
+  int iVar2;
+  int iVar3;
+  uint uVar4;
+  int extraout_r1;
+  undefined4 unaff_r4;
+  undefined4 in_lr;
+  bool bVar5;
+  undefined8 uVar6;
+  
+  iVar1 = DAT_ff8c2e24;
+  uVar6 = FUN_ff8274b4(*(undefined4 *)(DAT_ff8c2e24 + 0xb0),DAT_ff8c2e84);
+  iVar2 = (int)((ulonglong)uVar6 >> 0x20);
+  if ((int)uVar6 != 0) {
+    switchD_ff8443f8::default(s_LiveImage_c_ff8c2e8c);
+    iVar2 = extraout_r1;
+  }
+  iVar3 = *(int *)(iVar1 + 0x48);
+  bVar5 = iVar3 == 0;
+  if (bVar5) {
+    iVar3 = *(int *)(iVar1 + 0xec);
+    iVar2 = iVar1;
+  }
+  if (bVar5 && iVar3 == 1) {
+    *(undefined4 *)(iVar2 + 0x48) = 1;
+    *(undefined4 *)(iVar2 + 0x4c) = 1;
+    FUN_ff9e8190_JPCORE_enable();
+  }
+  uVar4 = *(uint *)(iVar1 + 0xb0);
+  if (((uVar4 & 1) - 1 & uVar4) != 0) {
+    iVar2 = FUN_ff812340(uVar4 >> 1);
+    if (iVar2 == -1) {
+      switchD_ff8443f8::default(s_KerSem_c_ff827564,DAT_ff827620,param_3,param_4,unaff_r4,in_lr);
+    }
+    return 0;
+  }
+  return 7;
+}
+
+
+
+
+// === FUN_ff8c3c94_StopMjpegMaking_Inner @ ff8c3c94 ===
+// Signature: undefined4 FUN_ff8c3c94_StopMjpegMaking_Inner(undefined4 param_1,undefined4 param_2,undefined4 param_3,undefined4 param_4);
+
+undefined4
+FUN_ff8c3c94_StopMjpegMaking_Inner
+          (undefined4 param_1,undefined4 param_2,undefined4 param_3,undefined4 param_4)
+
+{
+  int iVar1;
+  int iVar2;
+  uint uVar3;
+  undefined4 unaff_r4;
+  undefined4 in_lr;
+  
+  iVar1 = DAT_ff8c2e24;
+  iVar2 = FUN_ff8274b4(*(undefined4 *)(DAT_ff8c2e24 + 0xb0),DAT_ff8c2e84);
+  if (iVar2 != 0) {
+    switchD_ff8443f8::default(DAT_ff8c3d18,DAT_ff8c3d34);
+  }
+  if (*(int *)(iVar1 + 0x48) == 1) {
+    *(undefined4 *)(iVar1 + 0x48) = 0;
+    FUN_ff9e81a0_JPCORE_disable();
+  }
+  if (*(code **)(iVar1 + 0x80) != (code *)0x0) {
+    (**(code **)(iVar1 + 0x80))();
+  }
+  uVar3 = *(uint *)(iVar1 + 0xb0);
+  if (((uVar3 & 1) - 1 & uVar3) != 0) {
+    iVar1 = FUN_ff812340(uVar3 >> 1);
+    if (iVar1 == -1) {
+      switchD_ff8443f8::default(s_KerSem_c_ff827564,DAT_ff827620,param_3,param_4,unaff_r4,in_lr);
+    }
+    return 0;
+  }
+  return 7;
+}
+
+
+
+
+// === FUN_ffaa12b0_DMA_Completion_Callback @ ffaa12b0 ===
+// Signature: undefined4 FUN_ffaa12b0_DMA_Completion_Callback(void);
+
+undefined4 FUN_ffaa12b0_DMA_Completion_Callback(void)
+
+{
+  int iVar1;
+  uint uVar2;
+  
+  uVar2 = *DAT_ffaa1bb8;
+  if ((((uVar2 & 1) - 1 & uVar2) != 0) &&
+     (iVar1 = FUN_ff812538_EventFlagSet(uVar2 >> 1,1,0), iVar1 != -1)) {
+    return 0;
+  }
+  return 7;
+}
+
+
+
+
+// === FUN_ff8c3c64_EVF_FieldClear @ ff8c3c64 ===
+// Signature: void FUN_ff8c3c64_EVF_FieldClear(void);
+
+void FUN_ff8c3c64_EVF_FieldClear(void)
+
+{
+  int iVar1;
+  
+  iVar1 = DAT_ff8c2e24;
+  *(undefined4 *)(DAT_ff8c2e24 + 0x40) = 0;
+  *(undefined4 *)(iVar1 + 0x38) = 0;
+  *(undefined4 *)(iVar1 + 0x3c) = 0;
+  FUN_ff8c2ed8_EVF_pipeline_setup();
+  return;
+}
+
+
+
+
+// === sub_FF8C3BFC_RecordingPipelineSetup @ ff8c3bfc ===
+// Signature: void sub_FF8C3BFC_RecordingPipelineSetup(undefined4 param_1,undefined4 param_2,undefined4 param_3);
+
+void sub_FF8C3BFC_RecordingPipelineSetup(undefined4 param_1,undefined4 param_2,undefined4 param_3)
+
+{
+  int iVar1;
+  
+  iVar1 = DAT_ff8c2e24;
+  *(undefined4 *)(DAT_ff8c2e24 + 0x6c) = param_2;
+  *(undefined4 *)(iVar1 + 0x114) = param_1;
+  *(undefined4 *)(iVar1 + 0x118) = param_3;
+  return;
+}
+
+
+
+
+// === FUN_ff8f8ce8_JPCORE_FrameComplete @ ff8f8ce8 ===
+// Signature: void FUN_ff8f8ce8_JPCORE_FrameComplete(void);
+
+/* WARNING: Removing unreachable block (ram,0xff8ef978) */
+/* WARNING: Removing unreachable block (ram,0xff8ef96c) */
+/* WARNING: Removing unreachable block (ram,0xff8ef970) */
+/* WARNING: Removing unreachable block (ram,0xff8ef97c) */
+/* WARNING: Removing unreachable block (ram,0xff8ef980) */
+/* WARNING: Removing unreachable block (ram,0xff8ef99c) */
+
+void FUN_ff8f8ce8_JPCORE_FrameComplete(void)
+
+{
+  int iVar1;
+  int iVar2;
+  undefined4 *puVar3;
+  uint uVar4;
+  
+  iVar1 = DAT_ff8f9028;
+  uVar4 = *(uint *)(DAT_ff8f9028 + 0xc) | 1;
+  *(uint *)(DAT_ff8f9028 + 0xc) = uVar4;
+  if (uVar4 != 7) {
+    return;
+  }
+  *(undefined4 *)(iVar1 + 0xc) = 0;
+  if (*(int *)(iVar1 + 0x10) == 1) {
+    *(undefined4 *)(iVar1 + 0xc) = 1;
+  }
+  if (*(int *)(iVar1 + 0x14) == 1) {
+    *(uint *)(iVar1 + 0xc) = *(uint *)(iVar1 + 0xc) | 2;
+  }
+  if (*(int *)(iVar1 + 0x18) == 1) {
+    *(uint *)(iVar1 + 0xc) = *(uint *)(iVar1 + 0xc) | 4;
+  }
+  iVar1 = DAT_ff84924c;
+  if (*(int *)(DAT_ff84924c + 0xc) != 1) {
+    return;
+  }
+  iVar2 = FUN_ff827460(*(undefined4 *)(DAT_ff84924c + 0x1c));
+  if (iVar2 != 0) {
+    return;
+  }
+  FUN_ff8ef7f8(0xb,*(undefined4 *)(iVar1 + 0x10));
+  iVar1 = DAT_ff8f000c;
+  FUN_ff822af4(*(int *)(DAT_ff8f000c + 0x88) + 4,0xfff8ffff,0x20000);
+  puVar3 = *(undefined4 **)(iVar1 + 0x88);
+  *(undefined4 *)((uint)puVar3 & 0x3ffff | 0x340000) = 1;
+  *puVar3 = 1;
+  return;
+}
+
+
+
+
+// === FUN_ff849448_JPCORE_DMA_Start @ ff849448 ===
+// Signature: undefined4 FUN_ff849448_JPCORE_DMA_Start(int param_1,undefined4 param_2,undefined4 param_3,undefined4 param_4);
+
+undefined4
+FUN_ff849448_JPCORE_DMA_Start(int param_1,undefined4 param_2,undefined4 param_3,undefined4 param_4)
+
+{
+  int *piVar1;
+  undefined4 *puVar2;
+  int iVar3;
+  uint uVar4;
+  int iVar5;
+  undefined4 uVar6;
+  undefined4 local_44;
+  undefined4 local_40;
+  undefined4 local_3c;
+  undefined4 local_38;
+  undefined4 local_34;
+  undefined4 local_30;
+  undefined4 local_2c;
+  undefined4 local_28;
+  undefined4 local_24;
+  undefined4 local_20;
+  undefined4 local_1c;
+  undefined4 local_18;
+  
+  piVar1 = DAT_ff84924c;
+  if (*DAT_ff84924c == 0) {
+    switchD_ff8443f8::default(s_DefMarkMan_c_ff849220,DAT_ff849774);
+  }
+  puVar2 = DAT_ff84976c;
+  iVar3 = *(int *)(DAT_ff849764 + param_1 * 4);
+  iVar5 = 0;
+  if (iVar3 != -1) {
+    iVar5 = DAT_ff849768;
+  }
+  piVar1[10] = iVar3;
+  if (iVar3 != -1) {
+    iVar5 = *(int *)(iVar5 + iVar3 * 4);
+  }
+  *puVar2 = param_3;
+  puVar2[1] = param_4;
+  if (((iVar5 == 1) && (piVar1[5] != -1)) && (piVar1[8] == 0)) {
+    uVar6 = 0;
+    piVar1[4] = puVar2[iVar3 * 2 + 2];
+    piVar1[3] = 1;
+    FUN_ff8eed74_PipelineStep0();
+    FUN_ff8ebb34((int)(char)piVar1[5]);
+    local_2c = *(undefined4 *)(DAT_ff84923c + piVar1[10] * 4);
+    local_40 = 0;
+    local_44 = 0;
+    local_38 = 0;
+    local_24 = 3;
+    local_30 = 0;
+    local_3c = 0;
+    local_34 = 0;
+    local_20 = 0;
+    local_28 = 0;
+    local_1c = 0;
+    local_18 = 0;
+    FUN_ff8ef838(0xb,&local_44);
+    FUN_ff8ef930(0xb);
+    FUN_ff8efa80(0xb,0x40);
+    FUN_ff8efabc(0xb,FUN_ff849168,DAT_ff84976c);
+    FUN_ff8efaf8(0xb);
+    FUN_ff8efa44(0xb,0);
+    uVar4 = FUN_ff827460(piVar1[7]);
+    if ((uVar4 & 1) != 0) {
+      switchD_ff8443f8::default(s_DefMarkMan_c_ff849220,DAT_ff849778);
+    }
+    FUN_ff8ef7f8(0xb,piVar1[4]);
+    FUN_ff8ef950(0xb,2);
+  }
+  else {
+    uVar6 = 1;
+    piVar1[3] = 0;
+  }
+  return uVar6;
+}
+
+
+
+

@@ -1,0 +1,592 @@
+========================================================================
+ISP Pipeline Configuration Function Decompilation
+Firmware: IXUS 870 IS / SD 880 IS, version 1.01a
+Binary: PRIMARY.BIN, ARM:LE:32:v5t, base 0xFF810000
+========================================================================
+
+// ========================================================================
+// === PipelineConfig_FFA02DDC @ ffa02ddc ===
+// Description: Pipeline configuration function called with mode=4 (EVF) or mode=5 (video recording). KEY function that determines if ISP data is routed to JPCORE.
+// Function size: 292 bytes
+// Signature: void PipelineConfig_FFA02DDC(uint *param_1,undefined4 param_2,int param_3,uint *param_4);
+// ========================================================================
+
+
+void PipelineConfig_FFA02DDC(uint *param_1,undefined4 param_2,int param_3,uint *param_4)
+
+{
+  undefined4 *puVar1;
+  uint uVar2;
+  undefined4 uVar3;
+  
+  param_1[2] = param_4[2];
+  param_1[5] = param_4[5];
+  param_1[3] = param_4[3];
+  param_1[4] = param_4[4];
+  if (param_3 == 3) {
+    *param_1 = *param_4 >> 2;
+    param_1[1] = param_4[1] >> 2;
+    uVar3 = DAT_ffa039e0;
+    goto code_r0xff822ac0;
+  }
+  if (param_3 < 4) {
+    if (param_3 == 1) {
+      *param_1 = *param_4 >> 1;
+      uVar2 = param_4[1] >> 1;
+    }
+    else if (param_3 == 2) {
+      uVar2 = FUN_ffad3d98(*param_4,3);
+      *param_1 = uVar2;
+      uVar2 = FUN_ffad3d98(param_4[1],3);
+    }
+    else {
+LAB_ffa02ea0:
+      *param_1 = *param_4;
+      uVar2 = param_4[1];
+    }
+  }
+  else if (param_3 == 7) {
+    *param_1 = *param_4 >> 3;
+    uVar2 = param_4[1] >> 3;
+  }
+  else {
+    if (param_3 != 0xf) goto LAB_ffa02ea0;
+    *param_1 = *param_4 >> 4;
+    uVar2 = param_4[1] >> 4;
+  }
+  param_1[1] = uVar2;
+  uVar3 = 0;
+code_r0xff822ac0:
+  FUN_ff822ac0(DAT_ffa039f0,1);
+  FUN_ff822ac0(DAT_ffa039f4,param_2);
+  FUN_ff822ac0(DAT_ffa039f8,param_3);
+  puVar1 = DAT_ffa039fc;
+  *(undefined4 *)((uint)DAT_ffa039fc & 0x3ffff | 0x340000) = uVar3;
+  *puVar1 = uVar3;
+  return;
+}
+
+
+
+// ========================================================================
+// === VideoRecPipelineSetup_FFA03BC8 @ ffa03bc8 ===
+// Description: Video recording pipeline setup (called from FUN_ff9e508c, 6 args)
+// Function size: 836 bytes
+// Signature: void VideoRecPipelineSetup_FFA03BC8(int *param_1,undefined4 param_2,int param_3,int param_4,uint *param_5,uint *param_6);
+// ========================================================================
+
+
+void VideoRecPipelineSetup_FFA03BC8
+               (int *param_1,undefined4 param_2,int param_3,int param_4,uint *param_5,uint *param_6)
+
+{
+  int iVar1;
+  uint uVar2;
+  uint uVar3;
+  char cVar4;
+  undefined4 local_54;
+  uint local_50;
+  uint local_4c;
+  uint local_48;
+  int local_44;
+  uint local_40;
+  int local_3c;
+  uint local_38;
+  uint local_34;
+  uint local_30;
+  uint local_2c;
+  uint local_28;
+  
+  local_54 = 0;
+  FUN_ffa028d0(param_1,param_3,0,param_5,param_6);
+  cVar4 = param_6[2] <= param_6[3];
+  if (*param_6 == param_6[1]) {
+    cVar4 = cVar4 + '\x03';
+  }
+  else if (*param_6 < param_6[1]) {
+    cVar4 = cVar4 + '\x06';
+  }
+  local_50 = param_4 << 0xc;
+  if ((cVar4 != '\0' && cVar4 != '\x03') && cVar4 != '\x06') {
+    local_54 = 3;
+  }
+  uVar3 = local_50 | 0x10010;
+  if ((((cVar4 != '\0' && cVar4 != '\x03') && cVar4 != '\x06') || (local_54 = 1, cVar4 != '\0')) &&
+     (cVar4 != '\x01' && cVar4 != '\x02')) {
+    if ((cVar4 == '\x03' || cVar4 == '\x04') || cVar4 == '\x05') {
+      local_50 = local_50 | 0x10100;
+      local_4c = 0;
+      local_38 = 0;
+      local_3c = 0;
+      local_48 = 0;
+      local_44 = 0;
+      local_40 = 0;
+      goto LAB_ffa03df8;
+    }
+    local_50 = local_50 | 0x10011;
+    local_4c = param_6[1] | *param_6 << 8;
+    uVar3 = FUN_ffad3d98(0x100,param_6[1]);
+    local_4c = local_4c | (uVar3 & 0xff) << 0x10;
+    uVar3 = param_1[5];
+    local_48 = param_5[2] | uVar3 << 0x10;
+    local_44 = param_1[1];
+    if (param_3 != 2) {
+      uVar3 = param_1[4] - 1;
+      local_40 = param_5[1] | uVar3 * 0x10000;
+    }
+    else {
+      local_40 = param_1[4];
+    }
+    local_3c = 0;
+    if (param_3 == 2) {
+      local_40 = DAT_ffa03a60 | (local_40 - 1) * 0x10000;
+    }
+    iVar1 = 0;
+    if (param_1[2] != 0) {
+      iVar1 = *param_1;
+    }
+    local_38 = 0;
+    if (param_1[2] != 0) {
+      local_3c = iVar1 + -1;
+    }
+    if (param_5[2] != 0) {
+      local_38 = DAT_ffa03a60;
+    }
+    uVar2 = param_1[5];
+  }
+  else {
+    local_4c = *param_6 | param_6[1] << 8;
+    local_50 = uVar3;
+    uVar3 = FUN_ffad3d98(0x100,param_6[1]);
+    local_4c = local_4c | (uVar3 & 0xff) << 0x10;
+    local_48 = param_5[2] | param_5[5] << 0x10;
+    local_44 = param_1[1];
+    uVar3 = param_1[4] - 1;
+    local_40 = param_5[1] | uVar3 * 0x10000;
+    local_3c = 0;
+    iVar1 = 0;
+    if (param_1[2] != 0) {
+      iVar1 = *param_1;
+    }
+    local_38 = 0;
+    if (param_1[2] != 0) {
+      local_3c = iVar1 + -1;
+    }
+    if (param_5[2] != 0) {
+      local_38 = *param_5;
+    }
+    uVar2 = param_5[5];
+  }
+  local_44 = local_44 + -1;
+  if (uVar2 != 0) {
+    uVar3 = param_1[3] * 0x10000 - 0x10000;
+    local_38 = local_38 | uVar3;
+  }
+LAB_ffa03df8:
+  local_28 = 0;
+  if (param_5[2] != 0) {
+    local_28 = *param_5 - 1;
+  }
+  if ((cVar4 == '\0' || cVar4 == '\x03') || cVar4 == '\x06') {
+    local_34 = param_6[2] | param_6[3] << 8;
+    local_30 = param_1[2] | param_1[5] << 0x10;
+    local_2c = param_5[1] - 1 | param_5[4] * 0x10000 - 0x10000;
+    if (param_5[5] != 0) {
+      local_28 = local_28 | param_5[3] * 0x10000 - 0x10000;
+    }
+  }
+  else {
+    local_34 = 0;
+    local_30 = local_28;
+    if (cVar4 != '\x04') {
+      local_30 = param_1[2];
+      uVar3 = param_1[5];
+    }
+    local_28 = 0;
+    if (cVar4 != '\x04') {
+      local_30 = local_30 | uVar3 << 0x10;
+    }
+    else {
+      local_30 = 0;
+    }
+    local_2c = 0;
+  }
+  FUN_ffa03ba8();
+  FUN_ff822ac0(DAT_ffa04960,param_2);
+  FUN_ff822b18(DAT_ffa04964,&local_50,7);
+  FUN_ff822ac0(DAT_ffa04968,local_34);
+  FUN_ff822ac0(DAT_ffa0496c,local_30);
+  FUN_ff822ac0(DAT_ffa04970,local_2c);
+  FUN_ff822ac0(DAT_ffa04974,local_28);
+  FUN_ff822ac0(DAT_ffa04978,local_54);
+  return;
+}
+
+
+
+// ========================================================================
+// === EVFPipelineSetup_FFA03618 @ ffa03618 ===
+// Description: EVF/LCD pipeline setup (called from FUN_ff9e51d8, 7 args)
+// Function size: 1236 bytes
+// Signature: void EVFPipelineSetup_FFA03618(uint *param_1,undefined4 param_2,int param_3,int param_4,int param_5,uint *param_6,uint *param_7);
+// ========================================================================
+
+
+void EVFPipelineSetup_FFA03618
+               (uint *param_1,undefined4 param_2,int param_3,int param_4,int param_5,uint *param_6,
+               uint *param_7)
+
+{
+  int iVar1;
+  int iVar2;
+  uint uVar3;
+  uint uVar4;
+  int local_70;
+  uint local_6c;
+  uint local_68;
+  uint local_64;
+  int local_60;
+  uint local_5c;
+  int local_58;
+  uint local_54;
+  undefined4 local_50;
+  uint local_4c;
+  uint local_48;
+  int local_44;
+  uint local_40;
+  int local_3c;
+  uint local_38;
+  uint *puStack_34;
+  undefined4 local_30;
+  int local_2c;
+  int iStack_28;
+  
+  puStack_34 = param_1;
+  local_30 = param_2;
+  local_2c = param_3;
+  iStack_28 = param_4;
+  FUN_ffa028d0(param_1,param_3,param_4,param_6,param_7);
+  iVar2 = DAT_ffa03a58;
+  iVar1 = DAT_ffa039b0;
+  if (param_7[3] < param_7[2]) {
+    uVar4 = 0;
+  }
+  else if (param_7[2] == param_7[3]) {
+    uVar4 = 1;
+  }
+  else {
+    uVar4 = 2;
+  }
+  if (*param_7 == param_7[1]) {
+    uVar4 = uVar4 + 3;
+  }
+  else if (*param_7 < param_7[1]) {
+    uVar4 = uVar4 + 6;
+  }
+  local_70 = DAT_ffa03a5c;
+  switch(uVar4) {
+  case 0:
+    break;
+  case 1:
+  default:
+switchD_ffa03680_default:
+    local_70 = 0x8a;
+    break;
+  case 2:
+    break;
+  case 3:
+    goto LAB_ffa036bc;
+  case 4:
+    goto switchD_ffa03680_default;
+  case 5:
+LAB_ffa036bc:
+    local_70 = 0xe3;
+    break;
+  case 6:
+    goto LAB_ffa036b4;
+  case 7:
+    goto switchD_ffa03680_default;
+  case 8:
+LAB_ffa036b4:
+    local_70 = DAT_ffa03a58;
+  }
+  uVar3 = param_5 << 0xc;
+  local_6c = uVar3 | 0x10010;
+  if (uVar4 < 3) {
+    local_68 = *param_7 | param_7[1] << 8;
+    uVar3 = FUN_ffad3d98(0x100,param_7[1]);
+    local_68 = local_68 | (uVar3 & 0xff) << 0x10;
+    local_64 = param_6[2] | param_6[5] << 0x10;
+    local_60 = param_1[1] - 1;
+    local_5c = param_6[1] | (param_6[4] - 1) * 0x10000;
+    local_58 = 0;
+    uVar3 = 0;
+    if (param_1[2] != 0) {
+      uVar3 = *param_1;
+    }
+    local_54 = 0;
+    if (param_1[2] != 0) {
+      local_58 = uVar3 - 1;
+    }
+    if (param_6[2] != 0) {
+      local_54 = *param_6;
+    }
+    if (param_6[5] != 0) {
+      uVar3 = param_6[3];
+LAB_ffa0388c:
+      local_54 = local_54 | iVar1 + uVar3 * 0x10000;
+    }
+  }
+  else if ((uVar4 == 3 || uVar4 == 4) || uVar4 == 5) {
+    local_6c = uVar3 | 0x10100;
+    local_68 = 0;
+    local_54 = 0;
+    local_58 = 0;
+    local_64 = 0;
+    local_60 = 0;
+    local_5c = 0;
+  }
+  else {
+    local_6c = uVar3 | 0x10011;
+    local_68 = param_7[1] | *param_7 << 8;
+    uVar3 = FUN_ffad3d98(0x100,param_7[1]);
+    local_68 = local_68 | (uVar3 & 0xff) << 0x10;
+    local_64 = param_6[2] | param_1[5] << 0x10;
+    local_60 = param_1[1] - 1;
+    if (local_2c != 2) {
+      local_5c = param_6[1] | (param_1[4] - 1) * 0x10000;
+    }
+    else {
+      local_5c = param_1[4];
+    }
+    local_58 = 0;
+    if (local_2c == 2) {
+      local_5c = DAT_ffa03a60 | (local_5c - 1) * 0x10000;
+    }
+    uVar3 = 0;
+    if (param_1[2] != 0) {
+      uVar3 = *param_1;
+    }
+    local_54 = 0;
+    if (param_1[2] != 0) {
+      local_58 = uVar3 - 1;
+    }
+    if (param_6[2] != 0) {
+      local_54 = DAT_ffa03a60;
+    }
+    if (param_1[5] != 0) {
+      uVar3 = param_1[3];
+      goto LAB_ffa0388c;
+    }
+  }
+  if (local_70 == iVar2) {
+    local_38 = 0;
+    local_40 = param_6[1] - 1;
+    if (param_6[2] != 0) {
+      local_38 = *param_6;
+LAB_ffa038e8:
+      local_38 = local_38 - 1;
+    }
+  }
+  else {
+    local_38 = 0;
+    local_40 = param_1[1] - 1;
+    if (param_6[2] != 0) {
+      local_38 = *param_1;
+      goto LAB_ffa038e8;
+    }
+  }
+  if ((uVar4 == 0 || uVar4 == 3) || uVar4 == 6) {
+    local_50 = 0x10;
+    local_4c = param_7[2] | param_7[3] << 8;
+    uVar4 = FUN_ffad3d98(0x100,param_7[3]);
+    local_4c = local_4c | (uVar4 & 0xff) << 0x10;
+    local_48 = param_1[2] | param_1[5] << 0x10;
+    local_44 = (param_1[4] - 1) * 0x10000;
+    local_40 = local_40 | iVar1 + param_6[4] * 0x10000;
+    local_3c = 0;
+    if (param_1[5] != 0) {
+      local_3c = (param_1[3] - 1) * 0x10000;
+    }
+    if (param_6[5] != 0) {
+      local_38 = local_38 | iVar1 + param_6[3] * 0x10000;
+    }
+  }
+  else {
+    if (uVar4 == 1 || uVar4 == 7) {
+      local_48 = param_1[2] | param_1[5] << 0x10;
+    }
+    else {
+      if (uVar4 != 4) {
+        local_50 = 0x11;
+        local_4c = param_7[3] | param_7[2] << 8;
+        uVar4 = FUN_ffad3d98(0x100,param_7[3]);
+        local_4c = local_4c | (uVar4 & 0xff) << 0x10;
+        local_48 = param_1[2] | param_1[5] << 0x10;
+        local_44 = (param_1[4] - 1) * 0x10000;
+        if (param_4 == 2) {
+          local_40 = local_40 | 0xfff0000;
+        }
+        else {
+          local_40 = local_40 | iVar1 + param_6[4] * 0x10000;
+        }
+        local_3c = 0;
+        if (param_1[5] != 0) {
+          local_3c = (param_1[3] - 1) * 0x10000;
+        }
+        if (param_6[5] != 0) {
+          local_38 = local_38 | 0xfff0000;
+        }
+        goto LAB_ffa03b60;
+      }
+      local_48 = 0;
+    }
+    local_4c = 0;
+    local_50 = 0;
+    local_44 = 0;
+    local_40 = 0;
+    local_3c = 0;
+    local_38 = 0;
+  }
+LAB_ffa03b60:
+  FUN_ffa035f8();
+  FUN_ff822ac0(DAT_ffa04948,local_30);
+  FUN_ff822b18(DAT_ffa0494c,&local_6c,7);
+  FUN_ff822b18(DAT_ffa04950,&local_50,7);
+  FUN_ff822ac0(DAT_ffa04954,local_70);
+  return;
+}
+
+
+
+// ========================================================================
+// === PipelineRouting_FF8EFA6C @ ff8efa6c ===
+// Description: Pipeline routing function (called with (0, 0x11) from FrameProcessing)
+// Function size: 20 bytes
+// Signature: void PipelineRouting_FF8EFA6C(int param_1,undefined4 param_2);
+// ========================================================================
+
+
+void PipelineRouting_FF8EFA6C(int param_1,undefined4 param_2)
+
+{
+  undefined4 *puVar1;
+  int iVar2;
+  
+  iVar2 = DAT_ff8f001c;
+  if (param_1 < 8) {
+    iVar2 = DAT_ff8f0020;
+  }
+  puVar1 = (undefined4 *)(iVar2 + param_1 * 4);
+  *(undefined4 *)((uint)puVar1 & 0x3ffff | 0x340000) = param_2;
+  *puVar1 = param_2;
+  return;
+}
+
+
+
+// ========================================================================
+// === DMAInterruptSetup_FF9E4DF8 @ ff9e4df8 ===
+// Description: DMA/interrupt setup (called from both FrameProcessing paths)
+// Function size: 104 bytes
+// Signature: void DMAInterruptSetup_FF9E4DF8(int param_1,int *param_2,undefined4 param_3,int param_4);
+// ========================================================================
+
+
+void DMAInterruptSetup_FF9E4DF8(int param_1,int *param_2,undefined4 param_3,int param_4)
+
+{
+  uint *puVar1;
+  int iVar2;
+  int iVar3;
+  uint uStack_2c;
+  uint uStack_28;
+  uint uStack_24;
+  uint uStack_20;
+  uint uStack_1c;
+  uint uStack_18;
+  uint uStack_14;
+  uint uStack_10;
+  
+  puVar1 = DAT_ff9e4e78;
+  *DAT_ff9e4e78 = 0;
+  puVar1[1] = 0;
+  puVar1[2] = 0;
+  puVar1[3] = 0;
+  puVar1[4] = 0;
+  puVar1[5] = 0;
+  iVar3 = *param_2;
+  if (param_4 == 1) {
+    iVar2 = 4;
+  }
+  else {
+    iVar2 = 3;
+  }
+  puVar1[7] = 0;
+  puVar1[6] = (uint)(iVar3 * iVar2) >> 1;
+  puVar1[8] = param_2[1] - 1;
+  puVar1[9] = 0;
+  puVar1[10] = 0;
+  puVar1[0xb] = 0;
+  uStack_2c = (puVar1[9] | puVar1[10] << 0x10) & 0xfff1fff;
+  uStack_28 = (puVar1[6] | puVar1[8] << 0x10) & 0xfff3ffe;
+  uStack_24 = (puVar1[5] | puVar1[7] << 0x10) & 0xfff3ffe;
+  uStack_20 = puVar1[1] & DAT_ff8f0010;
+  uStack_1c = puVar1[3] & 0xffffffe;
+  uStack_18 = *puVar1 & DAT_ff8f0010;
+  uStack_14 = puVar1[2] & 0xffffffe;
+  uStack_10 = puVar1[4] & 0xffffffe;
+  iVar3 = DAT_ff8f000c + param_1 * 0xc;
+  FUN_ff822ac0(*(int *)(iVar3 + 4) + 0x40,0);
+  FUN_ff822b18(*(int *)(iVar3 + 4) + 0xc,&uStack_2c,8);
+  FUN_ff822af4(*(int *)(iVar3 + 4) + 4,0x7fffffff,puVar1[0xb] << 0x1f);
+  FUN_ff822af4(*(int *)(iVar3 + 4) + 4,0xbfffffff,0);
+  return;
+}
+
+
+
+// ========================================================================
+// === PipelineScalerConfig1_FF8F7110 @ ff8f7110 ===
+// Description: Pipeline scaler config (called with mode 1 or 2)
+// Function size: 12 bytes
+// Signature: void PipelineScalerConfig1_FF8F7110(undefined4 param_1);
+// ========================================================================
+
+
+void PipelineScalerConfig1_FF8F7110(undefined4 param_1)
+
+{
+  undefined4 *puVar1;
+  
+  puVar1 = DAT_ff8f7314;
+  *(undefined4 *)((uint)DAT_ff8f7314 & 0x3ffff | 0x340000) = param_1;
+  *puVar1 = param_1;
+  return;
+}
+
+
+
+// ========================================================================
+// === PipelineScalerConfig2_FF8F70F8 @ ff8f70f8 ===
+// Description: Pipeline scaler config (called with param, 1)
+// Function size: 24 bytes
+// Signature: void PipelineScalerConfig2_FF8F70F8(int param_1,int param_2);
+// ========================================================================
+
+
+void PipelineScalerConfig2_FF8F70F8(int param_1,int param_2)
+
+{
+  uint *puVar1;
+  uint uVar2;
+  
+  puVar1 = DAT_ff8f7310;
+  uVar2 = DAT_ff8f730c + param_2 * 0x10000 | param_1 - 1U;
+  *(uint *)((uint)DAT_ff8f7310 & 0x3ffff | 0x340000) = uVar2;
+  *puVar1 = uVar2;
+  return;
+}
+
+
+

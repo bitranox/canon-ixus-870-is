@@ -1,0 +1,124 @@
+========================================================================
+JPCORE Power/Init Function Decompilation
+Firmware: IXUS 870 IS / SD 880 IS, version 1.01a
+========================================================================
+
+// === FUN_ff815288_JPCORE_clock_power_enable @ ff815288 ===
+// Signature: void FUN_ff815288_JPCORE_clock_power_enable(uint param_1);
+
+void FUN_ff815288_JPCORE_clock_power_enable(uint param_1)
+
+{
+  int iVar1;
+  uint uVar2;
+  
+  if (0xe < (int)param_1) {
+    switchD_ff8443f8::default(s_MLHClock_c_ff815274,DAT_ff8154c8);
+  }
+  thunk_FUN_ff81056c();
+  iVar1 = DAT_ff815268;
+  *(uint *)(DAT_ff81526c + 8) = param_1;
+  if ((*(uint *)(iVar1 + 8) & 2) != 0) {
+    uVar2 = *(uint *)(iVar1 + 0x48);
+    if (uVar2 < param_1) {
+      FUN_ff8151f4();
+    }
+    else if (uVar2 != param_1) {
+      FUN_ff81515c();
+    }
+  }
+  return;
+}
+
+
+
+// === FUN_ff8152e8_additional_clock_init @ ff8152e8 ===
+// Signature: void FUN_ff8152e8_additional_clock_init(void);
+
+void FUN_ff8152e8_additional_clock_init(void)
+
+{
+  thunk_FUN_ff81056c();
+  if ((*(uint *)(DAT_ff815268 + 8) & 2) != 1) {
+    FUN_ff81515c(0xf,*(undefined4 *)(DAT_ff81526c + 8));
+  }
+  return;
+}
+
+
+
+// === FUN_ff8ef6b4_JPCORE_subsystem_init @ ff8ef6b4 ===
+// Signature: void FUN_ff8ef6b4_JPCORE_subsystem_init(void);
+
+void FUN_ff8ef6b4_JPCORE_subsystem_init(void)
+
+{
+  undefined4 *puVar1;
+  
+  puVar1 = DAT_ff8ef7e8;
+  *(undefined4 *)((uint)DAT_ff8ef7e8 & 0x3ffff | 0x340000) = 0x10000;
+  *puVar1 = 0x10000;
+  return;
+}
+
+
+
+// === FUN_ff8eebc8_JPCORE_power_deinit @ ff8eebc8 ===
+// Signature: undefined4 FUN_ff8eebc8_JPCORE_power_deinit(undefined4 param_1,undefined4 param_2,undefined4 param_3,undefined4 param_4);
+
+undefined4
+FUN_ff8eebc8_JPCORE_power_deinit
+          (undefined4 param_1,undefined4 param_2,undefined4 param_3,undefined4 param_4)
+
+{
+  int *piVar1;
+  int iVar2;
+  undefined4 uVar3;
+  uint uVar4;
+  undefined4 unaff_r4;
+  undefined4 in_lr;
+  
+  piVar1 = DAT_ff8eec70;
+  if (*DAT_ff8eec70 == 0) {
+    return 0;
+  }
+  FUN_ff8274b4(DAT_ff8eec70[1],0);
+  if (piVar1[5] == 0) {
+    switchD_ff8443f8::default(s_LclkChg_c_ff8eec74,0xe4);
+  }
+  iVar2 = piVar1[5];
+  piVar1[5] = iVar2 + -1;
+  if (iVar2 + -1 == 0) {
+    if (piVar1[3] == 0) {
+      if (piVar1[4] == 0) {
+        FUN_ff815320();
+        goto FUN_ff827584;
+      }
+      FUN_ff8ef6a8();
+      uVar3 = 5;
+    }
+    else {
+      iVar2 = piVar1[2];
+      if (iVar2 == 0) goto FUN_ff827584;
+      uVar3 = 1;
+      if (iVar2 != 1) {
+        if (iVar2 != 2) goto FUN_ff827584;
+        uVar3 = 2;
+      }
+    }
+    FUN_ff815288_JPCORE_clock_power_enable(uVar3);
+  }
+FUN_ff827584:
+  uVar4 = piVar1[1];
+  if (((uVar4 & 1) - 1 & uVar4) != 0) {
+    iVar2 = FUN_ff812340(uVar4 >> 1);
+    if (iVar2 == -1) {
+      switchD_ff8443f8::default(s_KerSem_c_ff827564,DAT_ff827620,param_3,param_4,unaff_r4,in_lr);
+    }
+    return 0;
+  }
+  return 7;
+}
+
+
+

@@ -1,0 +1,1255 @@
+========================================================================
+EVF Display Path & MJPEG Encoding Check — Decompilation
+Firmware: IXUS 870 IS / SD 880 IS, version 1.01a
+========================================================================
+
+========================================================================
+PART 1: Primary Target Functions
+========================================================================
+
+// === FUN_ff9e51d8_EVFDisplayPath @ 0xFF9E51D8 ===
+// Function name in Ghidra: FUN_ff9e51d8_calledByFrameProc
+// Signature: void FUN_ff9e51d8_calledByFrameProc(undefined4 param_1,undefined4 param_2,int param_3,undefined4 param_4,undefined4 param_5,undefined4 param_6);
+
+void FUN_ff9e51d8_calledByFrameProc
+               (undefined4 param_1,undefined4 param_2,int param_3,undefined4 param_4,
+               undefined4 param_5,undefined4 param_6)
+
+{
+  undefined4 *puVar1;
+  int iVar2;
+  undefined4 local_6c;
+  undefined4 local_68;
+  undefined4 local_64;
+  undefined4 local_60;
+  undefined1 auStack_5c [16];
+  undefined1 auStack_4c [8];
+  undefined4 local_44;
+  undefined4 local_40;
+  undefined4 local_3c;
+  undefined4 local_38;
+  undefined4 local_34;
+  undefined4 local_30;
+  undefined4 local_2c;
+  undefined4 local_28;
+  undefined1 auStack_24 [24];
+  
+  local_68 = 0;
+  FUN_ff9e4ef0_calledByFrameProc(param_1,param_2,param_3,param_5,param_6,&local_44);
+  FUN_ff9e4c20(auStack_5c,&local_6c,auStack_4c,&local_44);
+  local_3c = 0;
+  local_38 = local_44;
+  local_2c = local_40;
+  local_28 = 0;
+  local_30 = 0;
+  local_34 = 0;
+  FUN_ff9e4ec0(auStack_5c,&local_60,&local_64);
+  FUN_ff9e4e7c(auStack_5c,&local_3c,&local_68);
+  FUN_ffa0467c(3);
+  EVFPipelineSetup_FFA03618(auStack_24,2,local_60,local_68,local_64,&local_3c,auStack_5c);
+  FUN_ffa02ddc_PipelineResizer(&local_3c,4,local_6c,auStack_24);
+  puVar1 = DAT_ff9e5d28;
+  *DAT_ff9e5d28 = local_38;
+  puVar1[1] = local_2c;
+  FUN_ffa0473c(5);
+  PipelineScalerConfig2_FF8F70F8_calledByFrameProc(*puVar1,1);
+  PipelineScalerConfig1_FF8F7110_calledByFrameProc(2);
+  FUN_ff8f7128_calledByFrameProc(param_3 != 1);
+  iVar2 = DAT_ff9e4e60;
+  puVar1 = (undefined4 *)(DAT_ff9e4e60 + 100);
+  *(undefined4 *)(DAT_ff9e4e60 + 0x30) = *(undefined4 *)(DAT_ff9e4e60 + 0x60);
+  *(undefined4 *)(iVar2 + 0x34) = *puVar1;
+  PipelineRouting_FF8EFA6C_calledByFrameProc(0,0x11);
+  DMAInterruptSetup_FF9E4DF8_calledByFrameProc(0,DAT_ff9e5d2c,0,1);
+  FUN_ff8efabc_JPCORE_RegisterCallback_calledByFrameProc(0,DAT_ff9e5d30,0);
+  return;
+}
+
+
+
+// === FUN_ff9e8104_MjpegEncodingCheck @ 0xFF9E8104 ===
+// Function name in Ghidra: FUN_ff9e8104_MjpegEncodingCheck_calledByPipeline
+// Signature: void FUN_ff9e8104_MjpegEncodingCheck_calledByPipeline(undefined4 *param_1);
+
+void FUN_ff9e8104_MjpegEncodingCheck_calledByPipeline(undefined4 *param_1)
+
+{
+  int *piVar1;
+  int iVar2;
+  undefined4 *puVar3;
+  int iVar4;
+  int extraout_r1;
+  
+  *DAT_ff9e8250 = *param_1;
+  puVar3 = (undefined4 *)FUN_ff827abc(0x3c);
+  iVar2 = DAT_ff9e824c;
+  piVar1 = DAT_ff9e8238;
+  iVar4 = *DAT_ff9e8238;
+  *(undefined4 **)(DAT_ff9e824c + iVar4 * 4) = puVar3;
+  *puVar3 = 1;
+  FUN_ff82729c(piVar1[1],*(undefined4 *)(iVar2 + iVar4 * 4));
+  FUN_ffad1b70(*piVar1 + 1,10);
+  *piVar1 = extraout_r1;
+  return;
+}
+
+
+
+========================================================================
+PART 2: Functions Called by FUN_ff9e51d8 (EVF Display Path)
+========================================================================
+
+// FUN_ff9e51d8 calls 14 functions:
+//   0xFF9E4EF0
+//   0xFF9E4C20
+//   0xFF9E4EC0
+//   0xFF9E4E7C
+//   0xFFA0467C
+//   0xFFA03618
+//   0xFFA02DDC
+//   0xFFA0473C
+//   0xFF8F70F8
+//   0xFF8F7110
+//   0xFF8F7128
+//   0xFF8EFA6C
+//   0xFF9E4DF8
+//   0xFF8EFABC
+
+// === FUN_ff9e4ef0_calledByFrameProc_ff9e4ef0 @ 0xFF9E4EF0 ===
+// Function name in Ghidra: FUN_ff9e4ef0_calledByFrameProc
+// Signature: void FUN_ff9e4ef0_calledByFrameProc(undefined4 param_1,undefined4 param_2,undefined4 param_3,int param_4,undefined4 param_5,uint *param_6);
+
+void FUN_ff9e4ef0_calledByFrameProc
+               (undefined4 param_1,undefined4 param_2,undefined4 param_3,int param_4,
+               undefined4 param_5,uint *param_6)
+
+{
+  uint uVar1;
+  int iVar2;
+  uint uVar3;
+  undefined4 uVar4;
+  undefined4 uVar5;
+  bool bVar6;
+  undefined4 local_cc;
+  undefined4 local_c8;
+  undefined4 local_c4;
+  undefined4 local_c0;
+  undefined4 local_bc;
+  undefined4 local_b8;
+  undefined4 local_b4;
+  undefined4 local_64;
+  undefined4 local_60;
+  undefined4 local_5c;
+  undefined4 local_58;
+  undefined4 local_54;
+  undefined4 local_50;
+  undefined4 local_48;
+  undefined4 local_44;
+  undefined4 local_40;
+  uint local_3c;
+  undefined4 local_38;
+  uint local_34;
+  uint local_30;
+  int local_2c;
+  int local_28;
+  undefined4 local_24;
+  int local_20;
+  uint local_1c;
+  
+  FUN_ff9e8434_ResolutionQuery(&local_3c,&local_44,param_4,param_5);
+  FUN_ff9e8434_ResolutionQuery(&local_28,&local_44,param_4,0);
+  uVar1 = *DAT_ff9e4e64;
+  bVar6 = local_34 < uVar1;
+  uVar3 = local_34;
+  if (bVar6) {
+    uVar3 = local_20 - uVar1;
+    param_4 = local_28;
+    local_34 = uVar1;
+  }
+  local_38 = local_24;
+  if (bVar6) {
+    uVar3 = param_4 + (uVar3 >> 1);
+  }
+  local_30 = local_1c;
+  if (bVar6) {
+    local_3c = uVar3;
+  }
+  bVar6 = local_2c != 7;
+  FUN_ff822ac0(DAT_ff9e5d0c,0x80000000);
+  FUN_ff822ac0(DAT_ff9e5d10,0x1000);
+  FUN_ffa99ad8_ISPColorMatrix(local_44,local_40);
+  FUN_ffa99de0_ISPSensorConfig(param_1,param_2,local_3c,local_38,local_34,local_30,bVar6);
+  *param_6 = local_34;
+  param_6[1] = local_30;
+  FUN_ff822ac0(DAT_ff9e5d14,0);
+  FUN_ff822ac0(DAT_ff9e5d18,0);
+  local_64 = 0;
+  local_5c = 0;
+  local_48 = 0;
+  local_50 = 0;
+  local_60 = 0;
+  local_58 = 0;
+  local_54 = 0;
+  FUN_ffa99fb8_ISPConfigArray(&local_64);
+  if (local_2c == 7) {
+    uVar4 = 1;
+  }
+  else {
+    uVar4 = 0x11;
+  }
+  FUN_ff822ac0(DAT_ff9e5d1c,uVar4);
+  iVar2 = XREF_JPCORELiteral_FUN_ff849670(0);
+  uVar4 = DAT_ff9e5d20;
+  if (iVar2 == 1) {
+    uVar5 = 0;
+  }
+  else {
+    if (local_2c == 7) {
+      uVar5 = 0x100;
+    }
+    else {
+      uVar5 = 0x110;
+    }
+    FUN_ff822ac0(DAT_ff9e5d24,uVar5);
+    uVar5 = 1;
+  }
+  FUN_ff822ac0(uVar4,uVar5);
+  local_cc = 0;
+  local_c8 = 0;
+  local_b4 = 0;
+  local_b8 = 0;
+  local_c4 = 0;
+  local_c0 = 0;
+  local_bc = 0;
+  FUN_ffa99f6c_ISPConfigArray2(&local_cc);
+  return;
+}
+
+
+
+// === FUN_ff9e4c20_ff9e4c20 @ 0xFF9E4C20 ===
+// Function name in Ghidra: FUN_ff9e4c20
+// Signature: void FUN_ff9e4c20(uint *param_1,undefined4 *param_2,undefined4 *param_3,uint *param_4);
+
+void FUN_ff9e4c20(uint *param_1,undefined4 *param_2,undefined4 *param_3,uint *param_4)
+
+{
+  uint *puVar1;
+  uint uVar2;
+  undefined4 uVar3;
+  uint uVar4;
+  undefined4 uVar5;
+  
+  puVar1 = DAT_ff9e4e64;
+  *param_2 = 0;
+  uVar4 = *puVar1;
+  uVar5 = 1;
+  if (*param_4 < uVar4) {
+    switchD_ff8443f8::default(s_LiveImageSub_c_ff9e4e68,0x1cc,param_3,param_4,param_4);
+  }
+  else if (*param_4 == uVar4) {
+    param_1[1] = 1;
+    *param_1 = 1;
+  }
+  else {
+    uVar3 = FUN_ff9e7e00();
+    uVar4 = FUN_ffad3d98(*puVar1,uVar3);
+    param_1[1] = uVar4;
+    uVar2 = FUN_ffad3d98(*param_4,uVar3);
+    *param_1 = uVar2;
+    if (uVar2 < uVar4 << 1) {
+      *param_2 = 0;
+    }
+    else {
+      *param_2 = 1;
+      uVar5 = 2;
+      if ((*param_1 & 1) == 0) {
+        *param_1 = *param_1 >> 1;
+      }
+      else {
+        param_1[1] = param_1[1] << 1;
+      }
+    }
+  }
+  param_1[2] = 1;
+  param_1[3] = 1;
+  uVar3 = FUN_ffad3d98(param_1[1] * *param_4,*param_1);
+  uVar5 = FUN_ffad3d98(uVar3,uVar5);
+  *param_3 = uVar5;
+  param_3[1] = param_4[1];
+  return;
+}
+
+
+
+// === FUN_ff9e4ec0_ff9e4ec0 @ 0xFF9E4EC0 ===
+// Function name in Ghidra: FUN_ff9e4ec0
+// Signature: void FUN_ff9e4ec0(uint *param_1,undefined4 *param_2,undefined4 *param_3);
+
+void FUN_ff9e4ec0(uint *param_1,undefined4 *param_2,undefined4 *param_3)
+
+{
+  if (param_1[1] <= *param_1) {
+    *param_2 = 0;
+    *param_3 = 1;
+    return;
+  }
+  *param_2 = 2;
+  *param_3 = 0;
+  return;
+}
+
+
+
+// === FUN_ff9e4e7c_ff9e4e7c @ 0xFF9E4E7C ===
+// Function name in Ghidra: FUN_ff9e4e7c
+// Signature: void FUN_ff9e4e7c(int param_1,int param_2,undefined4 *param_3);
+
+void FUN_ff9e4e7c(int param_1,int param_2,undefined4 *param_3)
+
+{
+  undefined4 uVar1;
+  int iVar2;
+  uint uVar3;
+  
+  uVar3 = *(uint *)(param_1 + 0xc);
+  if (*(uint *)(param_1 + 8) < uVar3) {
+    iVar2 = FUN_ffad3d98(*(int *)(param_2 + 0x10) + -1,*(uint *)(param_1 + 8));
+    if (uVar3 * iVar2 < 0xf0) {
+      uVar1 = 1;
+    }
+    else {
+      uVar1 = 2;
+    }
+  }
+  else {
+    uVar1 = 0;
+  }
+  *param_3 = uVar1;
+  return;
+}
+
+
+
+// === FUN_ffa0467c_ffa0467c @ 0xFFA0467C ===
+// Function name in Ghidra: FUN_ffa0467c
+// Signature: void FUN_ffa0467c(undefined4 param_1);
+
+void FUN_ffa0467c(undefined4 param_1)
+
+{
+  undefined4 *puVar1;
+  
+  FUN_ff822ac0(DAT_ffa049c0,0);
+  puVar1 = DAT_ffa049c4;
+  *(undefined4 *)((uint)DAT_ffa049c4 & 0x3ffff | 0x340000) = param_1;
+  *puVar1 = param_1;
+  return;
+}
+
+
+
+// === EVFPipelineSetup_FFA03618_ffa03618 @ 0xFFA03618 ===
+// Function name in Ghidra: EVFPipelineSetup_FFA03618
+// Signature: void EVFPipelineSetup_FFA03618(uint *param_1,undefined4 param_2,int param_3,int param_4,int param_5,uint *param_6,uint *param_7);
+
+void EVFPipelineSetup_FFA03618
+               (uint *param_1,undefined4 param_2,int param_3,int param_4,int param_5,uint *param_6,
+               uint *param_7)
+
+{
+  int iVar1;
+  int iVar2;
+  uint uVar3;
+  uint uVar4;
+  int local_70;
+  uint local_6c;
+  uint local_68;
+  uint local_64;
+  int local_60;
+  uint local_5c;
+  int local_58;
+  uint local_54;
+  undefined4 local_50;
+  uint local_4c;
+  uint local_48;
+  int local_44;
+  uint local_40;
+  int local_3c;
+  uint local_38;
+  uint *puStack_34;
+  undefined4 local_30;
+  int local_2c;
+  int iStack_28;
+  
+  puStack_34 = param_1;
+  local_30 = param_2;
+  local_2c = param_3;
+  iStack_28 = param_4;
+  FUN_ffa028d0(param_1,param_3,param_4,param_6,param_7);
+  iVar2 = DAT_ffa03a58;
+  iVar1 = DAT_ffa039b0;
+  if (param_7[3] < param_7[2]) {
+    uVar4 = 0;
+  }
+  else if (param_7[2] == param_7[3]) {
+    uVar4 = 1;
+  }
+  else {
+    uVar4 = 2;
+  }
+  if (*param_7 == param_7[1]) {
+    uVar4 = uVar4 + 3;
+  }
+  else if (*param_7 < param_7[1]) {
+    uVar4 = uVar4 + 6;
+  }
+  local_70 = DAT_ffa03a5c;
+  switch(uVar4) {
+  case 0:
+    break;
+  case 1:
+  default:
+switchD_ffa03680_default:
+    local_70 = 0x8a;
+    break;
+  case 2:
+    break;
+  case 3:
+    goto LAB_ffa036bc;
+  case 4:
+    goto switchD_ffa03680_default;
+  case 5:
+LAB_ffa036bc:
+    local_70 = 0xe3;
+    break;
+  case 6:
+    goto LAB_ffa036b4;
+  case 7:
+    goto switchD_ffa03680_default;
+  case 8:
+LAB_ffa036b4:
+    local_70 = DAT_ffa03a58;
+  }
+  uVar3 = param_5 << 0xc;
+  local_6c = uVar3 | 0x10010;
+  if (uVar4 < 3) {
+    local_68 = *param_7 | param_7[1] << 8;
+    uVar3 = FUN_ffad3d98(0x100,param_7[1]);
+    local_68 = local_68 | (uVar3 & 0xff) << 0x10;
+    local_64 = param_6[2] | param_6[5] << 0x10;
+    local_60 = param_1[1] - 1;
+    local_5c = param_6[1] | (param_6[4] - 1) * 0x10000;
+    local_58 = 0;
+    uVar3 = 0;
+    if (param_1[2] != 0) {
+      uVar3 = *param_1;
+    }
+    local_54 = 0;
+    if (param_1[2] != 0) {
+      local_58 = uVar3 - 1;
+    }
+    if (param_6[2] != 0) {
+      local_54 = *param_6;
+    }
+    if (param_6[5] != 0) {
+      uVar3 = param_6[3];
+LAB_ffa0388c:
+      local_54 = local_54 | iVar1 + uVar3 * 0x10000;
+    }
+  }
+  else if ((uVar4 == 3 || uVar4 == 4) || uVar4 == 5) {
+    local_6c = uVar3 | 0x10100;
+    local_68 = 0;
+    local_54 = 0;
+    local_58 = 0;
+    local_64 = 0;
+    local_60 = 0;
+    local_5c = 0;
+  }
+  else {
+    local_6c = uVar3 | 0x10011;
+    local_68 = param_7[1] | *param_7 << 8;
+    uVar3 = FUN_ffad3d98(0x100,param_7[1]);
+    local_68 = local_68 | (uVar3 & 0xff) << 0x10;
+    local_64 = param_6[2] | param_1[5] << 0x10;
+    local_60 = param_1[1] - 1;
+    if (local_2c != 2) {
+      local_5c = param_6[1] | (param_1[4] - 1) * 0x10000;
+    }
+    else {
+      local_5c = param_1[4];
+    }
+    local_58 = 0;
+    if (local_2c == 2) {
+      local_5c = DAT_ffa03a60 | (local_5c - 1) * 0x10000;
+    }
+    uVar3 = 0;
+    if (param_1[2] != 0) {
+      uVar3 = *param_1;
+    }
+    local_54 = 0;
+    if (param_1[2] != 0) {
+      local_58 = uVar3 - 1;
+    }
+    if (param_6[2] != 0) {
+      local_54 = DAT_ffa03a60;
+    }
+    if (param_1[5] != 0) {
+      uVar3 = param_1[3];
+      goto LAB_ffa0388c;
+    }
+  }
+  if (local_70 == iVar2) {
+    local_38 = 0;
+    local_40 = param_6[1] - 1;
+    if (param_6[2] != 0) {
+      local_38 = *param_6;
+LAB_ffa038e8:
+      local_38 = local_38 - 1;
+    }
+  }
+  else {
+    local_38 = 0;
+    local_40 = param_1[1] - 1;
+    if (param_6[2] != 0) {
+      local_38 = *param_1;
+      goto LAB_ffa038e8;
+    }
+  }
+  if ((uVar4 == 0 || uVar4 == 3) || uVar4 == 6) {
+    local_50 = 0x10;
+    local_4c = param_7[2] | param_7[3] << 8;
+    uVar4 = FUN_ffad3d98(0x100,param_7[3]);
+    local_4c = local_4c | (uVar4 & 0xff) << 0x10;
+    local_48 = param_1[2] | param_1[5] << 0x10;
+    local_44 = (param_1[4] - 1) * 0x10000;
+    local_40 = local_40 | iVar1 + param_6[4] * 0x10000;
+    local_3c = 0;
+    if (param_1[5] != 0) {
+      local_3c = (param_1[3] - 1) * 0x10000;
+    }
+    if (param_6[5] != 0) {
+      local_38 = local_38 | iVar1 + param_6[3] * 0x10000;
+    }
+  }
+  else {
+    if (uVar4 == 1 || uVar4 == 7) {
+      local_48 = param_1[2] | param_1[5] << 0x10;
+    }
+    else {
+      if (uVar4 != 4) {
+        local_50 = 0x11;
+        local_4c = param_7[3] | param_7[2] << 8;
+        uVar4 = FUN_ffad3d98(0x100,param_7[3]);
+        local_4c = local_4c | (uVar4 & 0xff) << 0x10;
+        local_48 = param_1[2] | param_1[5] << 0x10;
+        local_44 = (param_1[4] - 1) * 0x10000;
+        if (param_4 == 2) {
+          local_40 = local_40 | 0xfff0000;
+        }
+        else {
+          local_40 = local_40 | iVar1 + param_6[4] * 0x10000;
+        }
+        local_3c = 0;
+        if (param_1[5] != 0) {
+          local_3c = (param_1[3] - 1) * 0x10000;
+        }
+        if (param_6[5] != 0) {
+          local_38 = local_38 | 0xfff0000;
+        }
+        goto LAB_ffa03b60;
+      }
+      local_48 = 0;
+    }
+    local_4c = 0;
+    local_50 = 0;
+    local_44 = 0;
+    local_40 = 0;
+    local_3c = 0;
+    local_38 = 0;
+  }
+LAB_ffa03b60:
+  FUN_ffa035f8();
+  FUN_ff822ac0(DAT_ffa04948,local_30);
+  FUN_ff822b18_RegBlockWrite(DAT_ffa0494c,&local_6c,7);
+  FUN_ff822b18_RegBlockWrite(DAT_ffa04950,&local_50,7);
+  FUN_ff822ac0(DAT_ffa04954,local_70);
+  return;
+}
+
+
+
+// === FUN_ffa02ddc_PipelineResizer_ffa02ddc @ 0xFFA02DDC ===
+// Function name in Ghidra: FUN_ffa02ddc_PipelineResizer
+// Signature: void FUN_ffa02ddc_PipelineResizer(uint *param_1,undefined4 param_2,int param_3,uint *param_4);
+
+void FUN_ffa02ddc_PipelineResizer(uint *param_1,undefined4 param_2,int param_3,uint *param_4)
+
+{
+  undefined4 *puVar1;
+  uint uVar2;
+  undefined4 uVar3;
+  
+  param_1[2] = param_4[2];
+  param_1[5] = param_4[5];
+  param_1[3] = param_4[3];
+  param_1[4] = param_4[4];
+  if (param_3 == 3) {
+    *param_1 = *param_4 >> 2;
+    param_1[1] = param_4[1] >> 2;
+    uVar3 = DAT_ffa039e0;
+    goto code_r0xff822ac0;
+  }
+  if (param_3 < 4) {
+    if (param_3 == 1) {
+      *param_1 = *param_4 >> 1;
+      uVar2 = param_4[1] >> 1;
+    }
+    else if (param_3 == 2) {
+      uVar2 = FUN_ffad3d98(*param_4,3);
+      *param_1 = uVar2;
+      uVar2 = FUN_ffad3d98(param_4[1],3);
+    }
+    else {
+LAB_ffa02ea0:
+      *param_1 = *param_4;
+      uVar2 = param_4[1];
+    }
+  }
+  else if (param_3 == 7) {
+    *param_1 = *param_4 >> 3;
+    uVar2 = param_4[1] >> 3;
+  }
+  else {
+    if (param_3 != 0xf) goto LAB_ffa02ea0;
+    *param_1 = *param_4 >> 4;
+    uVar2 = param_4[1] >> 4;
+  }
+  param_1[1] = uVar2;
+  uVar3 = 0;
+code_r0xff822ac0:
+  FUN_ff822ac0(DAT_ffa039f0,1);
+  FUN_ff822ac0(DAT_ffa039f4,param_2);
+  FUN_ff822ac0(DAT_ffa039f8,param_3);
+  puVar1 = DAT_ffa039fc;
+  *(undefined4 *)((uint)DAT_ffa039fc & 0x3ffff | 0x340000) = uVar3;
+  *puVar1 = uVar3;
+  return;
+}
+
+
+
+// === FUN_ffa0473c_ffa0473c @ 0xFFA0473C ===
+// Function name in Ghidra: FUN_ffa0473c
+// Signature: void FUN_ffa0473c(undefined4 param_1);
+
+void FUN_ffa0473c(undefined4 param_1)
+
+{
+  undefined4 *puVar1;
+  
+  FUN_ff822ac0(DAT_ffa049e0,0);
+  puVar1 = DAT_ffa049e4;
+  *(undefined4 *)((uint)DAT_ffa049e4 & 0x3ffff | 0x340000) = param_1;
+  *puVar1 = param_1;
+  return;
+}
+
+
+
+// === PipelineScalerConfig2_FF8F70F8_calledByFrameProc_ff8f70f8 @ 0xFF8F70F8 ===
+// Function name in Ghidra: PipelineScalerConfig2_FF8F70F8_calledByFrameProc
+// Signature: void PipelineScalerConfig2_FF8F70F8_calledByFrameProc(int param_1,int param_2);
+
+void PipelineScalerConfig2_FF8F70F8_calledByFrameProc(int param_1,int param_2)
+
+{
+  uint *puVar1;
+  uint uVar2;
+  
+  puVar1 = DAT_ff8f7310;
+  uVar2 = DAT_ff8f730c + param_2 * 0x10000 | param_1 - 1U;
+  *(uint *)((uint)DAT_ff8f7310 & 0x3ffff | 0x340000) = uVar2;
+  *puVar1 = uVar2;
+  return;
+}
+
+
+
+// === PipelineScalerConfig1_FF8F7110_calledByFrameProc_ff8f7110 @ 0xFF8F7110 ===
+// Function name in Ghidra: PipelineScalerConfig1_FF8F7110_calledByFrameProc
+// Signature: void PipelineScalerConfig1_FF8F7110_calledByFrameProc(undefined4 param_1);
+
+void PipelineScalerConfig1_FF8F7110_calledByFrameProc(undefined4 param_1)
+
+{
+  undefined4 *puVar1;
+  
+  puVar1 = DAT_ff8f7314;
+  *(undefined4 *)((uint)DAT_ff8f7314 & 0x3ffff | 0x340000) = param_1;
+  *puVar1 = param_1;
+  return;
+}
+
+
+
+// === FUN_ff8f7128_calledByFrameProc_ff8f7128 @ 0xFF8F7128 ===
+// Function name in Ghidra: FUN_ff8f7128_calledByFrameProc
+// Signature: void FUN_ff8f7128_calledByFrameProc(undefined4 param_1);
+
+void FUN_ff8f7128_calledByFrameProc(undefined4 param_1)
+
+{
+  undefined4 *puVar1;
+  
+  puVar1 = DAT_ff8f731c;
+  *(undefined4 *)((uint)DAT_ff8f731c & 0x3ffff | 0x340000) = param_1;
+  *puVar1 = param_1;
+  return;
+}
+
+
+
+// === PipelineRouting_FF8EFA6C_calledByFrameProc_ff8efa6c @ 0xFF8EFA6C ===
+// Function name in Ghidra: PipelineRouting_FF8EFA6C_calledByFrameProc
+// Signature: void PipelineRouting_FF8EFA6C_calledByFrameProc(int param_1,undefined4 param_2);
+
+void PipelineRouting_FF8EFA6C_calledByFrameProc(int param_1,undefined4 param_2)
+
+{
+  undefined4 *puVar1;
+  int iVar2;
+  
+  iVar2 = DAT_ff8f001c;
+  if (param_1 < 8) {
+    iVar2 = DAT_ff8f0020;
+  }
+  puVar1 = (undefined4 *)(iVar2 + param_1 * 4);
+  *(undefined4 *)((uint)puVar1 & 0x3ffff | 0x340000) = param_2;
+  *puVar1 = param_2;
+  return;
+}
+
+
+
+// === DMAInterruptSetup_FF9E4DF8_calledByFrameProc_ff9e4df8 @ 0xFF9E4DF8 ===
+// Function name in Ghidra: DMAInterruptSetup_FF9E4DF8_calledByFrameProc
+// Signature: void DMAInterruptSetup_FF9E4DF8_calledByFrameProc(int param_1,int *param_2,undefined4 param_3,int param_4);
+
+void DMAInterruptSetup_FF9E4DF8_calledByFrameProc
+               (int param_1,int *param_2,undefined4 param_3,int param_4)
+
+{
+  uint *puVar1;
+  int iVar2;
+  int iVar3;
+  uint uStack_2c;
+  uint uStack_28;
+  uint uStack_24;
+  uint uStack_20;
+  uint uStack_1c;
+  uint uStack_18;
+  uint uStack_14;
+  uint uStack_10;
+  
+  puVar1 = DAT_ff9e4e78;
+  *DAT_ff9e4e78 = 0;
+  puVar1[1] = 0;
+  puVar1[2] = 0;
+  puVar1[3] = 0;
+  puVar1[4] = 0;
+  puVar1[5] = 0;
+  iVar3 = *param_2;
+  if (param_4 == 1) {
+    iVar2 = 4;
+  }
+  else {
+    iVar2 = 3;
+  }
+  puVar1[7] = 0;
+  puVar1[6] = (uint)(iVar3 * iVar2) >> 1;
+  puVar1[8] = param_2[1] - 1;
+  puVar1[9] = 0;
+  puVar1[10] = 0;
+  puVar1[0xb] = 0;
+  uStack_2c = (puVar1[9] | puVar1[10] << 0x10) & 0xfff1fff;
+  uStack_28 = (puVar1[6] | puVar1[8] << 0x10) & 0xfff3ffe;
+  uStack_24 = (puVar1[5] | puVar1[7] << 0x10) & 0xfff3ffe;
+  uStack_20 = puVar1[1] & DAT_ff8f0010;
+  uStack_1c = puVar1[3] & 0xffffffe;
+  uStack_18 = *puVar1 & DAT_ff8f0010;
+  uStack_14 = puVar1[2] & 0xffffffe;
+  uStack_10 = puVar1[4] & 0xffffffe;
+  iVar3 = DAT_ff8f000c + param_1 * 0xc;
+  FUN_ff822ac0(*(int *)(iVar3 + 4) + 0x40,0);
+  FUN_ff822b18_RegBlockWrite(*(int *)(iVar3 + 4) + 0xc,&uStack_2c,8);
+  FUN_ff822af4_RegRMW(*(int *)(iVar3 + 4) + 4,0x7fffffff,puVar1[0xb] << 0x1f);
+  FUN_ff822af4_RegRMW(*(int *)(iVar3 + 4) + 4,0xbfffffff,0);
+  return;
+}
+
+
+
+// === FUN_ff8efabc_JPCORE_RegisterCallback_calledByFrameProc_ff8efabc @ 0xFF8EFABC ===
+// Function name in Ghidra: FUN_ff8efabc_JPCORE_RegisterCallback_calledByFrameProc
+// Signature: undefined4 FUN_ff8efabc_JPCORE_RegisterCallback_calledByFrameProc(int param_1,undefined4 param_2,undefined4 param_3);
+
+undefined4
+FUN_ff8efabc_JPCORE_RegisterCallback_calledByFrameProc
+          (int param_1,undefined4 param_2,undefined4 param_3)
+
+{
+  undefined4 uVar1;
+  int iVar2;
+  
+  iVar2 = DAT_ff8f0024;
+  *(undefined4 *)(DAT_ff8f0024 + param_1 * 0xc) = param_2;
+  iVar2 = iVar2 + param_1 * 0xc;
+  *(undefined4 *)(iVar2 + 4) = param_3;
+  *(undefined4 *)(iVar2 + 8) = 1;
+  iVar2 = FUN_ff826f0c_InterruptReg
+                    (*(undefined4 *)(DAT_ff8f000c + param_1 * 0xc),
+                     *(undefined4 *)(DAT_ff8f000c + param_1 * 0xc + 8),param_1);
+  if (iVar2 == 1) {
+    uVar1 = 0;
+  }
+  else {
+    uVar1 = 3;
+  }
+  return uVar1;
+}
+
+
+
+========================================================================
+PART 3: Sub-functions Writing ISP/JPCORE Registers (0xC0F0xxxx-0xC0F1xxxx)
+========================================================================
+
+// Found 7 sub-functions accessing ISP/JPCORE registers
+
+// === FUN_ffa99ad8_ISPColorMatrix_ffa99ad8 [ISP/JPCORE] @ 0xFFA99AD8 ===
+// Function name in Ghidra: FUN_ffa99ad8_ISPColorMatrix
+// Signature: void FUN_ffa99ad8_ISPColorMatrix(undefined4 param_1,undefined4 param_2);
+
+void FUN_ffa99ad8_ISPColorMatrix(undefined4 param_1,undefined4 param_2)
+
+{
+  undefined4 *puVar1;
+  
+  FUN_ff822ac0(DAT_ffa9a198,param_1);
+  puVar1 = DAT_ffa9a19c;
+  *(undefined4 *)((uint)DAT_ffa9a19c & 0x3ffff | 0x340000) = param_2;
+  *puVar1 = param_2;
+  return;
+}
+
+
+
+// === FUN_ffa99de0_ISPSensorConfig_ffa99de0 [ISP/JPCORE] @ 0xFFA99DE0 ===
+// Function name in Ghidra: FUN_ffa99de0_ISPSensorConfig
+// Signature: void FUN_ffa99de0_ISPSensorConfig(undefined4 param_1,uint param_2,int param_3,int param_4,int param_5,int param_6,int param_7);
+
+void FUN_ffa99de0_ISPSensorConfig
+               (undefined4 param_1,uint param_2,int param_3,int param_4,int param_5,int param_6,
+               int param_7)
+
+{
+  uint *puVar1;
+  uint uVar2;
+  int iVar3;
+  undefined4 local_78;
+  undefined4 local_74;
+  undefined4 local_70;
+  int local_6c;
+  int local_68;
+  undefined4 local_64;
+  undefined4 local_60;
+  undefined4 local_5c;
+  undefined4 local_58;
+  undefined4 local_54;
+  undefined4 local_50;
+  int local_4c;
+  undefined4 local_48;
+  uint local_44;
+  uint local_40;
+  undefined4 local_3c;
+  undefined4 local_38;
+  undefined4 local_34;
+  uint uStack_30;
+  int iStack_2c;
+  int iStack_28;
+  
+  puVar1 = DAT_ffa9a1e0;
+  if (param_7 != 0) {
+    uVar2 = 2;
+  }
+  else {
+    uVar2 = 3;
+  }
+  *DAT_ffa9a1e0 = uVar2;
+  if (param_7 != 0) {
+    uVar2 = 4;
+  }
+  else {
+    uVar2 = 6;
+  }
+  puVar1[3] = uVar2;
+  puVar1[4] = uVar2;
+  local_34 = param_1;
+  uStack_30 = param_2;
+  iStack_2c = param_3;
+  iStack_28 = param_4;
+  if (puVar1[2] < *puVar1) {
+    uVar2 = *puVar1 - puVar1[2];
+    puVar1[1] = uVar2;
+    FUN_ff822ac0(DAT_ffa9a1e4,uVar2 * 0x10 & 0xf0 | 1);
+    FUN_ff822ac0(DAT_ffa9a1e8,(param_6 + puVar1[1]) * 0x10000 & 0x1fffffff | 1);
+    FUN_ff822ac0(DAT_ffa9a1ec,
+                 (puVar1[3] - puVar1[1]) * 0x1000 & 0x1f000 | (puVar1[4] - puVar1[1]) * 0x10 & 0x1f0
+                 | 3);
+    local_4c = param_2 + puVar1[1] + -1;
+  }
+  else {
+    local_4c = 0;
+  }
+  local_48 = 0;
+  puVar1[5] = param_2;
+  iVar3 = *puVar1 + param_4 + puVar1[1];
+  uVar2 = param_3 + 0x52U + param_5;
+  local_44 = iVar3 * 0x10000 & 0x1fffffffU | param_3 + 0x52U & 0x1fff;
+  local_40 = (iVar3 + param_6) * 0x10000 & 0x1fffffffU | uVar2 & 0x1fff;
+  local_38 = 0;
+  local_3c = 0;
+  FUN_ffa99bd8(&local_44);
+  local_78 = 0;
+  local_70 = local_34;
+  local_6c = param_2 - 1;
+  local_68 = (uVar2 - (uVar2 & 1)) + 5;
+  local_64 = 0;
+  local_74 = 0;
+  local_60 = 0;
+  local_50 = 0;
+  local_54 = 0;
+  local_58 = 0;
+  local_5c = 0;
+  FUN_ffa99afc(&local_78);
+  return;
+}
+
+
+
+// === FUN_ffa99fb8_ISPConfigArray_ffa99fb8 [ISP/JPCORE] @ 0xFFA99FB8 ===
+// Function name in Ghidra: FUN_ffa99fb8_ISPConfigArray
+// Signature: void FUN_ffa99fb8_ISPConfigArray(void);
+
+void FUN_ffa99fb8_ISPConfigArray(void)
+
+{
+  undefined4 *puVar1;
+  
+  puVar1 = DAT_ffa9a1f8;
+  *(undefined4 *)((uint)DAT_ffa9a1f8 & 0x3ffff | 0x340000) = 0;
+  *puVar1 = 0;
+  return;
+}
+
+
+
+// === FUN_ffa99f6c_ISPConfigArray2_ffa99f6c [ISP/JPCORE] @ 0xFFA99F6C ===
+// Function name in Ghidra: FUN_ffa99f6c_ISPConfigArray2
+// Signature: void FUN_ffa99f6c_ISPConfigArray2(int *param_1);
+
+void FUN_ffa99f6c_ISPConfigArray2(int *param_1)
+
+{
+  int *piVar1;
+  int iVar2;
+  
+  FUN_ff822ac0(DAT_ffa9a1f0,*param_1 + param_1[1] * 0x10);
+  piVar1 = DAT_ffa9a1f4;
+  iVar2 = param_1[2] + param_1[3] * 0x10 + param_1[4] * 0x100 + param_1[5] * 0x1000 +
+          param_1[6] * 0x10000;
+  *(int *)((uint)DAT_ffa9a1f4 & 0x3ffff | 0x340000) = iVar2;
+  *piVar1 = iVar2;
+  return;
+}
+
+
+
+// === FUN_ffa035f8_ffa035f8 [ISP/JPCORE] @ 0xFFA035F8 ===
+// Function name in Ghidra: FUN_ffa035f8
+// Signature: void FUN_ffa035f8(void);
+
+void FUN_ffa035f8(void)
+
+{
+  undefined4 *puVar1;
+  
+  FUN_ff822ac0(DAT_ffa03a50,1);
+  puVar1 = DAT_ffa03a54;
+  *(undefined4 *)((uint)DAT_ffa03a54 & 0x3ffff | 0x340000) = 1;
+  *puVar1 = 1;
+  return;
+}
+
+
+
+// === FUN_ffa99bd8_ffa99bd8 [ISP/JPCORE] @ 0xFFA99BD8 ===
+// Function name in Ghidra: FUN_ffa99bd8
+// Signature: void FUN_ffa99bd8(undefined4 *param_1);
+
+void FUN_ffa99bd8(undefined4 *param_1)
+
+{
+  undefined4 *puVar1;
+  undefined4 uVar2;
+  
+  FUN_ff822ac0(DAT_ffa9a1c0,*param_1);
+  FUN_ff822ac0(DAT_ffa9a1c4,param_1[1]);
+  FUN_ff822ac0(DAT_ffa9a1c8,param_1[2]);
+  puVar1 = DAT_ffa9a1cc;
+  uVar2 = param_1[3];
+  *(undefined4 *)((uint)DAT_ffa9a1cc & 0x3ffff | 0x340000) = uVar2;
+  *puVar1 = uVar2;
+  return;
+}
+
+
+
+// === FUN_ffa99afc_ffa99afc [ISP/JPCORE] @ 0xFFA99AFC ===
+// Function name in Ghidra: FUN_ffa99afc
+// Signature: void FUN_ffa99afc(uint *param_1);
+
+void FUN_ffa99afc(uint *param_1)
+
+{
+  undefined4 *puVar1;
+  
+  FUN_ff822ac0(DAT_ffa9a1a0,(param_1[1] & 0x7ff) << 0x10 | *param_1 & 0x1ff);
+  FUN_ff822ac0(DAT_ffa9a1a4,(param_1[0xb] & 0x1fff) << 0x10 | param_1[4] & 0xfff);
+  FUN_ff822ac0(DAT_ffa9a1a8,(param_1[0xc] & 0x1fff) << 0x10 | param_1[7] & 0xfff);
+  FUN_ff822ac0(DAT_ffa9a1ac,(param_1[3] & 0x1fff) << 0x10 | param_1[2] & 0xfff);
+  FUN_ff822ac0(DAT_ffa9a1b0,(param_1[6] & 0x1fff) << 0x10 | param_1[5] & 0xfff);
+  FUN_ff822ac0(DAT_ffa9a1b4,(param_1[9] & 0x1fff) << 0x10 | param_1[8] & 0xfff);
+  FUN_ff822ac0(DAT_ffa9a1b8,param_1[10] & 0x3f);
+  puVar1 = DAT_ffa9a1bc;
+  *(undefined4 *)((uint)DAT_ffa9a1bc & 0x3ffff | 0x340000) = 1;
+  *puVar1 = 1;
+  return;
+}
+
+
+
+========================================================================
+PART 4: Functions Called by FUN_ff9e8104 (MjpegEncodingCheck)
+========================================================================
+
+// FUN_ff9e8104 calls 3 functions:
+//   0xFF827ABC
+//   0xFF82729C
+//   0xFFAD1B70
+
+// === FUN_ff827abc_ff827abc @ 0xFF827ABC ===
+// Function name in Ghidra: FUN_ff827abc
+// Signature: int FUN_ff827abc(undefined4 param_1);
+
+int FUN_ff827abc(undefined4 param_1)
+
+{
+  int iVar1;
+  
+  iVar1 = FUN_ff8139a8();
+  if (iVar1 == 0) {
+    FUN_ff811578(s_Size___ld_ff827b4c,param_1);
+    switchD_ff8443f8::default(s_Memory_c_ff827b58,0x42);
+  }
+  return iVar1;
+}
+
+
+
+// === FUN_ff82729c_ff82729c @ 0xFF82729C ===
+// Function name in Ghidra: FUN_ff82729c
+// Signature: undefined4 FUN_ff82729c(uint param_1,undefined4 param_2);
+
+undefined4 FUN_ff82729c(uint param_1,undefined4 param_2)
+
+{
+  int iVar1;
+  
+  if (((param_1 & 1) - 1 & param_1) != 0) {
+    iVar1 = FUN_ff8127e8(param_1 >> 1,param_2,0,DAT_ff8271e0);
+    if (iVar1 == -2) {
+      return 0xd;
+    }
+    if (iVar1 == 0) {
+      return 0;
+    }
+  }
+  return 7;
+}
+
+
+
+// === FUN_ffad1b70_ffad1b70 @ 0xFFAD1B70 ===
+// Function name in Ghidra: FUN_ffad1b70
+// Signature: undefined8 FUN_ffad1b70(uint param_1,uint param_2);
+
+/* WARNING: Removing unreachable block (ram,0xff8114b8) */
+
+undefined8 FUN_ffad1b70(uint param_1,uint param_2)
+
+{
+  int iVar1;
+  uint uVar2;
+  uint uVar3;
+  uint uVar4;
+  bool bVar5;
+  bool bVar6;
+  bool bVar7;
+  bool bVar8;
+  undefined8 uVar9;
+  
+  if ((int)(param_1 | param_2) < 0) {
+    uVar2 = param_2 & 0x80000000;
+    if ((int)uVar2 < 0) {
+      param_2 = -param_2;
+    }
+    uVar4 = uVar2 ^ (int)param_1 >> 0x20;
+    if (SUB41(param_1 >> 0x1f,0)) {
+      param_1 = -param_1;
+    }
+    if (param_1 >> 4 < param_2) goto LAB_ffad1c90;
+    uVar3 = param_2;
+    if (param_1 >> 8 < param_2) goto LAB_ffad1c60;
+LAB_ffad1c20:
+    param_2 = uVar3 << 6;
+    uVar2 = 0xfc000000;
+    if (param_1 >> 8 < param_2) goto LAB_ffad1c60;
+    param_2 = uVar3 << 0xc;
+    uVar2 = 0xfff00000;
+    if (param_1 >> 8 < param_2) goto LAB_ffad1c60;
+    param_2 = uVar3 << 0x12;
+    uVar2 = 0xffffc000;
+    if (param_2 <= param_1 >> 8) {
+      uVar2 = 0xffffff00;
+      param_2 = uVar3 << 0x18;
+    }
+    bVar5 = false;
+    if (param_2 == 0) {
+      FUN_ff813500(s_ARM_Library_runtime_error___sign_ff8114fc,2,2);
+      FUN_ff813500(s_Detail___s_ff81155c,s_arithmetic_instruction__>_divide_ff811530);
+      FUN_ff810940();
+      if (*(code **)(DAT_ff810e8c + 8) == (code *)0x0) {
+        FUN_ff813500(s_DRYOS_PANIC__Module_Code____d__P_ff810e94,0x40,4);
+        do {
+                    /* WARNING: Do nothing block with infinite loop */
+        } while( true );
+      }
+                    /* WARNING: Could not recover jumptable at 0xff810d9c. Too many branches */
+                    /* WARNING: Treating indirect jump as call */
+      uVar9 = (**(code **)(DAT_ff810e8c + 8))(0x40,4);
+      return uVar9;
+    }
+    do {
+      if (bVar5) {
+        param_2 = param_2 >> 6;
+      }
+LAB_ffad1c60:
+      bVar5 = param_2 <= param_1 >> 7;
+      if (bVar5) {
+        param_1 = param_1 + param_2 * -0x80;
+      }
+      bVar6 = param_2 <= param_1 >> 6;
+      if (bVar6) {
+        param_1 = param_1 + param_2 * -0x40;
+      }
+      bVar7 = param_2 <= param_1 >> 5;
+      if (bVar7) {
+        param_1 = param_1 + param_2 * -0x20;
+      }
+      bVar8 = param_2 <= param_1 >> 4;
+      if (bVar8) {
+        param_1 = param_1 + param_2 * -0x10;
+      }
+      uVar2 = (((uVar2 * 2 + (uint)bVar5) * 2 + (uint)bVar6) * 2 + (uint)bVar7) * 2 + (uint)bVar8;
+LAB_ffad1c90:
+      bVar5 = param_2 <= param_1 >> 3;
+      if (bVar5) {
+        param_1 = param_1 + param_2 * -8;
+      }
+      uVar3 = uVar2 * 2 + (uint)bVar5;
+      bVar6 = param_2 <= param_1 >> 2;
+      if (bVar6) {
+        param_1 = param_1 + param_2 * -4;
+      }
+      uVar2 = uVar3 * 2 + (uint)bVar6;
+      bVar5 = true;
+    } while (CARRY4(uVar3,uVar3) || CARRY4(uVar3 * 2,(uint)bVar6));
+    bVar5 = param_2 <= param_1 >> 1;
+    if (bVar5) {
+      param_1 = param_1 + param_2 * -2;
+    }
+    uVar3 = param_1 - param_2;
+    if (param_2 > param_1) {
+      uVar3 = param_1;
+    }
+    iVar1 = (uVar2 * 2 + (uint)bVar5) * 2 + (uint)(param_2 <= param_1);
+    if ((int)uVar4 >> 0x1f < 0) {
+      iVar1 = -iVar1;
+    }
+    if ((bool)((byte)(uVar4 >> 0x1e) & 1)) {
+      uVar3 = -uVar3;
+    }
+    return CONCAT44(uVar3,iVar1);
+  }
+  iVar1 = 0;
+  if (param_2 <= param_1 >> 1) {
+    if (param_2 <= param_1 >> 4) {
+      if (param_2 <= param_1 >> 8) {
+        uVar4 = 0;
+        uVar3 = param_2;
+        goto LAB_ffad1c20;
+      }
+      bVar5 = param_2 <= param_1 >> 7;
+      if (bVar5) {
+        param_1 = param_1 + param_2 * -0x80;
+      }
+      bVar6 = param_2 <= param_1 >> 6;
+      if (bVar6) {
+        param_1 = param_1 + param_2 * -0x40;
+      }
+      bVar7 = param_2 <= param_1 >> 5;
+      if (bVar7) {
+        param_1 = param_1 + param_2 * -0x20;
+      }
+      bVar8 = param_2 <= param_1 >> 4;
+      if (bVar8) {
+        param_1 = param_1 + param_2 * -0x10;
+      }
+      iVar1 = (((uint)bVar5 * 2 + (uint)bVar6) * 2 + (uint)bVar7) * 2 + (uint)bVar8;
+    }
+    bVar5 = param_2 <= param_1 >> 3;
+    if (bVar5) {
+      param_1 = param_1 + param_2 * -8;
+    }
+    bVar6 = param_2 <= param_1 >> 2;
+    if (bVar6) {
+      param_1 = param_1 + param_2 * -4;
+    }
+    bVar7 = param_2 <= param_1 >> 1;
+    if (bVar7) {
+      param_1 = param_1 + param_2 * -2;
+    }
+    iVar1 = ((iVar1 * 2 + (uint)bVar5) * 2 + (uint)bVar6) * 2 + (uint)bVar7;
+  }
+  uVar2 = param_1 - param_2;
+  if (param_2 > param_1) {
+    uVar2 = param_1;
+  }
+  return CONCAT44(uVar2,iVar1 * 2 + (uint)(param_2 <= param_1));
+}
+
+
+

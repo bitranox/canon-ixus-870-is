@@ -1,0 +1,173 @@
+==========================================================================
+Pipeline Frame Callback + DMA Decompilation
+==========================================================================
+
+##########################################################################
+# FUN_ff8c1fe4_PipelineFrameCallback
+# Address: 0xff8c1fe4
+##########################################################################
+
+Function: FUN_ff8c1fe4_PipelineFrameCallback
+Entry: ff8c1fe4
+Size: 200 bytes
+
+--- CALLERS ---
+  PARAM from ff8c31dc in FUN_ff8c2ed8_EVFSetupInner (ff8c2ed8)
+  PARAM from ff8c2df8 in FUN_ff8c2b7c (ff8c2b7c)
+  Total: 2
+
+--- CALLEES ---
+  ff8c2008 -> ff8eed74 = FUN_ff8eed74_PipelineStep0 (ff8eed74)
+  ff8c200c -> ff8f6e24 = FUN_ff8f6e24_PipelineStep1 (ff8f6e24)
+  ff8c2028 -> ff9e8104 = FUN_ff9e8104_MjpegEncodingCheck (ff9e8104)
+  ff8c2030 -> ff8f8dd8 = XREF_PS3Literal_FUN_ff8f8dd8_PipelineStep2 (ff8f8dd8)
+  ff8c2040 -> ff8eb574 = XREF_PS3_Base_FUN_ff8eb574_PipelineStep3 (ff8eb574)
+  ff8c2068 -> ff9e5328 = FUN_ff9e5328_FrameProcessing (ff9e5328)
+  ff8c2070 -> ff9e7994 = FUN_ff9e7994_VideoModeProcessing (ff9e7994)
+  ff8c2084 -> ff92bf38 = FUN_ff92bf38 (ff92bf38)
+  ff8c2098 -> ffad1878 = FUN_ffad1878 (ffad1878)
+  Total: 9
+
+--- DECOMPILED CODE ---
+
+
+void FUN_ff8c1fe4_PipelineFrameCallback
+               (undefined4 param_1,undefined4 param_2,undefined4 param_3,undefined4 param_4,
+               undefined4 param_5,undefined4 param_6,undefined4 param_7)
+
+{
+  int iVar1;
+  undefined2 uVar2;
+  undefined4 local_24;
+  undefined4 local_20;
+  undefined4 local_1c;
+  
+  iVar1 = DAT_ff8c2e24;
+  *(undefined4 *)(DAT_ff8c2e24 + 300) = DAT_ff8c2e28;
+  FUN_ff8eed74_PipelineStep0();
+  FUN_ff8f6e24_PipelineStep1();
+  local_24 = *(undefined4 *)(iVar1 + 0x48);
+  local_20 = 0;
+  local_1c = 0;
+  FUN_ff9e8104_MjpegEncodingCheck(&local_24);
+  XREF_PS3Literal_FUN_ff8f8dd8_PipelineStep2(param_2);
+  XREF_PS3_Base_FUN_ff8eb574_PipelineStep3(param_3,param_4,param_7);
+  FUN_ff9e5328_FrameProcessing
+            (param_3,param_4,*(undefined4 *)(iVar1 + 0x1c),*(undefined4 *)(iVar1 + 0xd4),
+             *(undefined4 *)(iVar1 + 0xd0),*(ushort *)(iVar1 + 0x12) >> 2,iVar1 + 0x14c);
+  FUN_ff9e7994_VideoModeProcessing(*(undefined4 *)(iVar1 + 0xd4));
+  uVar2 = FUN_ff92bf38(iVar1 + 0x130,iVar1 + 0x132,0);
+  *(undefined2 *)(iVar1 + 0x134) = uVar2;
+  FUN_ffad1878(iVar1 + 0x136,iVar1 + 0x130,6);
+  *(undefined2 *)(iVar1 + 0x16) = *(undefined2 *)(iVar1 + 0x12);
+  return;
+}
+
+
+--- ROM DATA REFERENCES ---
+  ff8c1fe8: [ff8c2e24] = 0x000070D8 (28888)
+  ff8c1fec: [ff8c2e28] = 0x00001043 (4163)
+  ff8c1ff4: [Stack[0x8]] = (unreadable)
+  ff8c2004: [00007204] = (unreadable)
+  ff8c2010: [00007120] = (unreadable)
+  ff8c2014: [Stack[-0x24]] = (unreadable)
+  ff8c201c: [Stack[-0x20]] = (unreadable)
+  ff8c2020: [Stack[-0x1c]] = (unreadable)
+  ff8c2044: [000070ea] = (unreadable)
+  ff8c2048: [000071a8] = (unreadable)
+  ff8c2054: [Stack[-0x30]] = (unreadable)
+  ff8c2058: [000070f4] = (unreadable)
+  ff8c205c: [000071ac] = (unreadable)
+  ff8c206c: [000071ac] = (unreadable)
+  ff8c2088: [0000720c] = (unreadable)
+  ff8c209c: [000070ea] = (unreadable)
+  ff8c20a0: [000070ee] = (unreadable)
+
+##########################################################################
+# FUN_ff8c4208_DMA_trigger
+# Address: 0xff8c4208
+##########################################################################
+
+Function: FUN_ff8c4208_DMA_Trigger
+Entry: ff8c4208
+Size: 48 bytes
+
+--- CALLERS ---
+  UNCONDITIONAL_CALL from ffaa226c in FUN_ffaa2224_Inner_GetContMovJpeg (ffaa2224)
+  Total: 1
+
+--- CALLEES ---
+  Total: 0
+
+--- DECOMPILED CODE ---
+
+
+void FUN_ff8c4208_DMA_Trigger(undefined4 param_1,undefined4 param_2,undefined4 param_3)
+
+{
+  int iVar1;
+  undefined4 uVar2;
+  
+  iVar1 = DAT_ff8c43f4;
+  *(undefined4 *)(DAT_ff8c43f4 + 0x120) = param_3;
+  *(undefined4 *)(iVar1 + 0x58) = param_1;
+  *(undefined4 *)(iVar1 + 0x5c) = 3;
+  uVar2 = DAT_ff8c4418;
+  *(undefined4 *)(iVar1 + 0x54) = 0;
+  *(undefined4 *)(iVar1 + 0xa0) = param_2;
+  *(undefined4 *)(iVar1 + 100) = uVar2;
+  return;
+}
+
+
+--- ROM DATA REFERENCES ---
+  ff8c420c: [ff8c43f4] = 0x000070D8 (28888)
+  ff8c4210: [000071f8] = (unreadable)
+  ff8c4214: [00007130] = (unreadable)
+  ff8c421c: [00007134] = (unreadable)
+  ff8c4224: [ff8c4418] = 0x40EA23D0 (1089086416)
+  ff8c4228: [0000712c] = (unreadable)
+  ff8c422c: [00007178] = (unreadable)
+  ff8c4230: [0000713c] = (unreadable)
+
+##########################################################################
+# FUN_ff8c4288_MjpegActiveCheck
+# Address: 0xff8c4288
+##########################################################################
+
+Function: FUN_ff8c4288_MjpegActiveCheck
+Entry: ff8c4288
+Size: 12 bytes
+
+--- CALLERS ---
+  UNCONDITIONAL_CALL from ff84ed8c in FUN_ff84ed54 (ff84ed54)
+  UNCONDITIONAL_CALL from ff84f15c in FUN_ff84f12c (ff84f12c)
+  UNCONDITIONAL_CALL from ffaa13fc in FUN_ffaa13f8 (ffaa13f8)
+  UNCONDITIONAL_CALL from ffaa1758 in FUN_ffaa173c (ffaa173c)
+  UNCONDITIONAL_CALL from ffaa1980 in FUN_ffaa196c (ffaa196c)
+  UNCONDITIONAL_CALL from ffaa2120 in FUN_ffaa2110 (ffaa2110)
+  UNCONDITIONAL_CALL from ffaa24f0 in FUN_ffaa24ec (ffaa24ec)
+  UNCONDITIONAL_CALL from ffaa331c in FUN_ffaa3318 (ffaa3318)
+  UNCONDITIONAL_CALL from ff8fa1b4 in FUN_ff8fa178 (ff8fa178)
+  UNCONDITIONAL_CALL from ffaa2238 in FUN_ffaa2224_Inner_GetContMovJpeg (ffaa2224)
+  UNCONDITIONAL_CALL from ff9e87c0 in FUN_ff9e87b8 (ff9e87b8)
+  UNCONDITIONAL_CALL from ff9e883c in FUN_ff9e8834 (ff9e8834)
+  UNCONDITIONAL_CALL from ff9e88c0 in FUN_ff9e88b0 (ff9e88b0)
+  Total: 13
+
+--- CALLEES ---
+  Total: 0
+
+--- DECOMPILED CODE ---
+
+
+undefined4 FUN_ff8c4288_MjpegActiveCheck(void)
+
+{
+  return *(undefined4 *)(DAT_ff8c43f4 + 0xec);
+}
+
+
+--- ROM DATA REFERENCES ---
+  ff8c4288: [ff8c43f4] = 0x000070D8 (28888)
+  ff8c428c: [000071c4] = (unreadable)

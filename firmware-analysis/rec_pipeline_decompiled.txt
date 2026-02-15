@@ -1,0 +1,370 @@
+========================================
+Function: RecPipelineSetup_FF8C3BFC
+Address:  0xFF8C3BFC
+Size:     20 bytes
+========================================
+
+void sub_FF8C3BFC_RecordingPipelineSetup(undefined4 param_1,undefined4 param_2,undefined4 param_3)
+
+{
+  int iVar1;
+  
+  iVar1 = DAT_ff8c2e24;
+  *(undefined4 *)(DAT_ff8c2e24 + 0x6c) = param_2;
+  *(undefined4 *)(iVar1 + 0x114) = param_1;
+  *(undefined4 *)(iVar1 + 0x118) = param_3;
+  return;
+}
+
+
+
+========================================
+Function: DMA_Trigger_FF8C4208
+Address:  0xFF8C4208
+Size:     48 bytes
+========================================
+
+void FUN_ff8c4208_DMA_Trigger(undefined4 param_1,undefined4 param_2,undefined4 param_3)
+
+{
+  int iVar1;
+  undefined4 uVar2;
+  
+  iVar1 = DAT_ff8c43f4;
+  *(undefined4 *)(DAT_ff8c43f4 + 0x120) = param_3;
+  *(undefined4 *)(iVar1 + 0x58) = param_1;
+  *(undefined4 *)(iVar1 + 0x5c) = 3;
+  uVar2 = DAT_ff8c4418;
+  *(undefined4 *)(iVar1 + 0x54) = 0;
+  *(undefined4 *)(iVar1 + 0xa0) = param_2;
+  *(undefined4 *)(iVar1 + 100) = uVar2;
+  return;
+}
+
+
+
+========================================
+Function: MovieFrameGetter_FF92FE8C
+Address:  0xFF92FE8C
+Size:     552 bytes
+========================================
+
+undefined4
+sub_FF92FE8C_MovieFrameGetter(uint *param_1,int *param_2,undefined4 *param_3,int *param_4)
+
+{
+  int iVar1;
+  uint uVar2;
+  int iVar3;
+  int *piVar4;
+  int iVar5;
+  uint uVar6;
+  int extraout_r1;
+  uint uVar7;
+  int *piVar8;
+  int iVar9;
+  bool bVar10;
+  
+  iVar1 = DAT_ff93050c;
+  iVar9 = *(int *)(DAT_ff93050c + 0xbc);
+  if (*(uint *)(DAT_ff93050c + 200) < *(uint *)(DAT_ff93050c + 0x1c)) {
+    switchD_ff8443f8::default(DAT_ff92f6c0,DAT_ff930520);
+  }
+  uVar2 = *(int *)(iVar1 + 0x28) + 1;
+  *(uint *)(iVar1 + 0x28) = uVar2;
+  if (*(uint *)(iVar1 + 0x40) < uVar2) {
+    return 0x80000001;
+  }
+  iVar3 = FUN_ff930a68(uVar2);
+  if (iVar3 == 0) {
+    return 0x80000003;
+  }
+  FUN_ffad3d98(*(undefined4 *)(iVar1 + 0x28),*(undefined4 *)(iVar1 + 0x94));
+  if (extraout_r1 == 1) {
+    if (*(short *)(iVar1 + 2) == 0) {
+      FUN_ff92fc4c();
+    }
+    else {
+      iVar3 = *(int *)(iVar1 + 0x14c);
+      bVar10 = iVar3 == 0;
+      uVar2 = *(int *)(iVar1 + 0x5c) + 4;
+      if (iVar3 == 0) {
+        bVar10 = *(uint *)(iVar1 + 0x148) <= uVar2;
+      }
+      if (bVar10 && (iVar3 != 0 || uVar2 != *(uint *)(iVar1 + 0x148))) {
+        return 0x80000005;
+      }
+      iVar3 = *(int *)(iVar1 + 0x5c);
+      uVar2 = *(uint *)(iVar1 + 0x148);
+      *(uint *)(iVar1 + 0x148) = uVar2 - (iVar3 + 4U);
+      *(uint *)(iVar1 + 0x14c) = *(int *)(iVar1 + 0x14c) - (uint)(uVar2 < iVar3 + 4U);
+      uVar2 = *(uint *)(iVar1 + 0x150);
+      *(uint *)(iVar1 + 0x150) = uVar2 + iVar3 + 4U;
+      *(uint *)(iVar1 + 0x154) = *(int *)(iVar1 + 0x154) + (uint)CARRY4(uVar2,iVar3 + 4U);
+      piVar4 = *(int **)(iVar1 + 0x1c);
+      uVar2 = *(uint *)(iVar1 + 200);
+      piVar8 = (int *)(iVar1 + 0x1c);
+      if ((int *)uVar2 != piVar4) {
+        piVar8 = piVar4;
+      }
+      iVar5 = *(int *)(iVar1 + 0x28);
+      if ((int *)uVar2 == piVar4) {
+        piVar8 = *(int **)(iVar1 + 0xc4);
+      }
+      uVar6 = FUN_ffad3d98(iVar5,*(undefined4 *)(iVar1 + 0x94));
+      *(int **)(DAT_ff92f6d8 + (~uVar6 & 1) * 4) = piVar8;
+      uVar7 = (int)piVar8 + iVar3;
+      if (uVar2 < uVar7) {
+        uVar7 = *(int *)(iVar1 + 0xc4) + (uVar7 - uVar2);
+      }
+      *(uint *)(iVar1 + 0x1c) = uVar7;
+      if (iVar5 != 1) {
+        FUN_ff9306b4(iVar9 + uVar6 * 4,*(undefined4 *)(iVar1 + 0xd4));
+        *(int *)(iVar1 + 0xd4) = *(int *)(iVar1 + 0xd4) + *(int *)(iVar1 + 0x5c);
+      }
+    }
+  }
+  uVar2 = *(uint *)(iVar1 + 200);
+  uVar6 = *(uint *)(iVar1 + 0x1c);
+  if (uVar6 == uVar2) {
+    uVar6 = *(uint *)(iVar1 + 0xc4);
+  }
+  else if (*(int *)(iVar1 + 0x28) == 1) {
+    uVar6 = *(uint *)(iVar1 + 0xc0);
+  }
+  *param_1 = uVar6;
+  iVar9 = *(int *)(iVar1 + 0x70);
+  if (uVar2 < uVar6 + iVar9) {
+    *param_2 = uVar2 - uVar6;
+    *param_3 = *(undefined4 *)(iVar1 + 0xc4);
+    *param_4 = iVar9 - *param_2;
+  }
+  else {
+    *param_2 = iVar9;
+    *param_3 = 0;
+    *param_4 = 0;
+  }
+  iVar3 = *(int *)(iVar1 + 0x14c);
+  bVar10 = iVar3 == 0;
+  if (iVar3 == 0) {
+    bVar10 = *(uint *)(iVar1 + 0x148) <= iVar9 + 8U;
+  }
+  if (bVar10 && (iVar3 != 0 || iVar9 + 8U != *(uint *)(iVar1 + 0x148))) {
+    return 0x80000005;
+  }
+  uVar2 = *(uint *)(iVar1 + 0x150) + *(uint *)(iVar1 + 0x70);
+  if (*(int *)(iVar1 + 0x154) + (uint)CARRY4(*(uint *)(iVar1 + 0x150),*(uint *)(iVar1 + 0x70)) +
+      (uint)(0xfffffffb < uVar2) + (uint)(0xfffffffb < uVar2 + 4) == 0) {
+    return 0;
+  }
+  return 0x80000007;
+}
+
+
+
+========================================
+Function: MjpegActiveCheck_FF8C4288
+Address:  0xFF8C4288
+Size:     12 bytes
+========================================
+
+undefined4 FUN_ff8c4288_MjpegActiveCheck(void)
+
+{
+  return *(undefined4 *)(DAT_ff8c43f4 + 0xec);
+}
+
+
+
+========================================
+Function: StopContinuousVRAMData_FF8C425C
+Address:  0xFF8C425C
+Size:     44 bytes
+========================================
+
+/* WARNING: Removing unreachable block (ram,0xff827518) */
+
+undefined4
+StopContinuousVRAMData_FW
+          (undefined4 param_1,undefined4 param_2,undefined4 param_3,undefined4 param_4)
+
+{
+  int iVar1;
+  uint uVar2;
+  
+  iVar1 = DAT_ff8c43f4;
+  *(undefined4 *)(DAT_ff8c43f4 + 0xa0) = 0;
+  *(undefined4 *)(iVar1 + 0x120) = 0;
+  *(undefined4 *)(iVar1 + 0xa4) = 0;
+  *(undefined4 *)(iVar1 + 0x54) = 0;
+  *(undefined4 *)(iVar1 + 0x5c) = 4;
+  uVar2 = *(uint *)(iVar1 + 0xb8);
+  if (0 < *(int *)*DAT_ff827560) {
+    switchD_ff8443f8::default(s_KerSem_c_ff827564,DAT_ff827574,param_3,param_4,param_3,param_4);
+  }
+  if (0 < *DAT_ff827578) {
+    switchD_ff8443f8::default(s_KerSem_c_ff827564,DAT_ff82757c);
+  }
+  if (((uVar2 & 1) - 1 & uVar2) != 0) {
+    iVar1 = FUN_ff812374(uVar2 >> 1,0);
+    if (iVar1 == -4) {
+      return 0xb;
+    }
+    if (iVar1 == -2) {
+      return 9;
+    }
+    if (iVar1 == 0) {
+      return 0;
+    }
+    switchD_ff8443f8::default(s_KerSem_c_ff827564,DAT_ff827580);
+  }
+  return 7;
+}
+
+
+
+========================================
+Function: GetContMovieJpeg_Inner_FFAA2224
+Address:  0xFFAA2224
+Size:     120 bytes
+========================================
+
+undefined4
+FUN_ffaa2224_Inner_GetContMovJpeg(uint param_1,undefined4 *param_2,code *param_3,undefined4 param_4)
+
+{
+  undefined4 uVar1;
+  int iVar2;
+  
+  iVar2 = FUN_ff8c4288_MjpegActiveCheck();
+  if (iVar2 != 1) {
+    return 0x11;
+  }
+  if (param_1 < 0x1f) {
+    FUN_ff8c4208_DMA_Trigger(param_1,param_3,param_4);
+    uVar1 = DAT_ffaa2318;
+    *param_2 = DAT_ffaa2314;
+    param_2[1] = uVar1;
+    FUN_ff8fb36c(s_MJVRAM_Address____p_ffaa231c);
+    FUN_ff8fb36c(s_MJVRAM_Size___0x_x_ffaa2334,param_2[1]);
+    return 0;
+  }
+  (*param_3)(param_4);
+  return 3;
+}
+
+
+
+========================================
+Function: PipelineFrameCallback_FF8C1FE4
+Address:  0xFF8C1FE4
+Size:     200 bytes
+========================================
+
+void FUN_ff8c1fe4_PipelineFrameCallback
+               (undefined4 param_1,undefined4 param_2,undefined4 param_3,undefined4 param_4,
+               undefined4 param_5,undefined4 param_6,undefined4 param_7)
+
+{
+  int iVar1;
+  undefined2 uVar2;
+  undefined4 local_24;
+  undefined4 local_20;
+  undefined4 local_1c;
+  
+  iVar1 = DAT_ff8c2e24;
+  *(undefined4 *)(DAT_ff8c2e24 + 300) = DAT_ff8c2e28;
+  FUN_ff8eed74_PipelineStep0();
+  FUN_ff8f6e24_PipelineStep1();
+  local_24 = *(undefined4 *)(iVar1 + 0x48);
+  local_20 = 0;
+  local_1c = 0;
+  FUN_ff9e8104_MjpegEncodingCheck(&local_24);
+  XREF_PS3Literal_FUN_ff8f8dd8_PipelineStep2(param_2);
+  XREF_PS3_Base_FUN_ff8eb574_PipelineStep3(param_3,param_4,param_7);
+  FUN_ff9e5328_FrameProcessing
+            (param_3,param_4,*(undefined4 *)(iVar1 + 0x1c),*(undefined4 *)(iVar1 + 0xd4),
+             *(undefined4 *)(iVar1 + 0xd0),*(ushort *)(iVar1 + 0x12) >> 2,iVar1 + 0x14c);
+  FUN_ff9e7994_VideoModeProcessing(*(undefined4 *)(iVar1 + 0xd4));
+  uVar2 = FUN_ff92bf38(iVar1 + 0x130,iVar1 + 0x132,0);
+  *(undefined2 *)(iVar1 + 0x134) = uVar2;
+  FUN_ffad1878(iVar1 + 0x136,iVar1 + 0x130,6);
+  *(undefined2 *)(iVar1 + 0x16) = *(undefined2 *)(iVar1 + 0x12);
+  return;
+}
+
+
+
+========================================
+Function: EVFSetup_FF8C3C64
+Address:  0xFF8C3C64
+Size:     48 bytes
+========================================
+
+void FUN_ff8c3c64_EVF_FieldClear(void)
+
+{
+  int iVar1;
+  
+  iVar1 = DAT_ff8c2e24;
+  *(undefined4 *)(DAT_ff8c2e24 + 0x40) = 0;
+  *(undefined4 *)(iVar1 + 0x38) = 0;
+  *(undefined4 *)(iVar1 + 0x3c) = 0;
+  FUN_ff8c2ed8_EVFSetupInner();
+  return;
+}
+
+
+
+========================================
+Function: StartMjpegInner_FF8C3D38
+Address:  0xFF8C3D38
+Size:     84 bytes
+========================================
+
+undefined4
+FUN_ff8c3d38_StartMjpegMaking_Inner
+          (undefined4 param_1,undefined4 param_2,undefined4 param_3,undefined4 param_4)
+
+{
+  int iVar1;
+  int iVar2;
+  int iVar3;
+  uint uVar4;
+  int extraout_r1;
+  undefined4 unaff_r4;
+  undefined4 in_lr;
+  bool bVar5;
+  undefined8 uVar6;
+  
+  iVar1 = DAT_ff8c2e24;
+  uVar6 = FUN_ff8274b4(*(undefined4 *)(DAT_ff8c2e24 + 0xb0),DAT_ff8c2e84);
+  iVar2 = (int)((ulonglong)uVar6 >> 0x20);
+  if ((int)uVar6 != 0) {
+    switchD_ff8443f8::default(s_LiveImage_c_ff8c2e8c);
+    iVar2 = extraout_r1;
+  }
+  iVar3 = *(int *)(iVar1 + 0x48);
+  bVar5 = iVar3 == 0;
+  if (bVar5) {
+    iVar3 = *(int *)(iVar1 + 0xec);
+    iVar2 = iVar1;
+  }
+  if (bVar5 && iVar3 == 1) {
+    *(undefined4 *)(iVar2 + 0x48) = 1;
+    *(undefined4 *)(iVar2 + 0x4c) = 1;
+    FUN_ff9e8190_JPCORE_Enable();
+  }
+  uVar4 = *(uint *)(iVar1 + 0xb0);
+  if (((uVar4 & 1) - 1 & uVar4) != 0) {
+    iVar2 = FUN_ff812340(uVar4 >> 1);
+    if (iVar2 == -1) {
+      switchD_ff8443f8::default(s_KerSem_c_ff827564,DAT_ff827620,param_3,param_4,unaff_r4,in_lr);
+    }
+    return 0;
+  }
+  return 7;
+}
+
+
+

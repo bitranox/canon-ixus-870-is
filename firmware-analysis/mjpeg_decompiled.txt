@@ -1,0 +1,308 @@
+========================================================================
+Hardware MJPEG Function Decompilation
+Firmware: IXUS 870 IS / SD 880 IS, version 1.01a
+========================================================================
+
+// === StartMjpegMaking_FW @ ff9e8dd8 ===
+// Signature: undefined4 StartMjpegMaking_FW(void);
+
+undefined4 StartMjpegMaking_FW(void)
+
+{
+  FUN_ff8c3d38(0,0,0,0);
+  return 0;
+}
+
+
+
+// === StopMjpegMaking_FW @ ff9e8df8 ===
+// Signature: undefined4 StopMjpegMaking_FW(void);
+
+undefined4 StopMjpegMaking_FW(void)
+
+{
+  FUN_ff8c3c94();
+  return 0;
+}
+
+
+
+// === GetContinuousMovieJpegVRAMData_FW @ ffaa234c ===
+// Signature: uint GetContinuousMovieJpegVRAMData_FW(undefined4 *param_1,undefined4 param_2,undefined4 param_3,undefined4 param_4);
+
+uint GetContinuousMovieJpegVRAMData_FW
+               (undefined4 *param_1,undefined4 param_2,undefined4 param_3,undefined4 param_4)
+
+{
+  undefined4 *puVar1;
+  uint uVar2;
+  undefined4 uVar3;
+  undefined4 uStack_18;
+  undefined4 uStack_14;
+  
+  puVar1 = DAT_ffaa1bb8;
+  uVar3 = *param_1;
+  uStack_18 = param_3;
+  uStack_14 = param_4;
+  FUN_ff869508(*DAT_ffaa1bb8,1);
+  uVar2 = FUN_ffaa2224(uVar3,&uStack_18,&LAB_ffaa12b0,0);
+  if ((uVar2 & 1) == 0) {
+    FUN_ff869330(*puVar1,1,0);
+    FUN_ff8c425c();
+  }
+  return uVar2;
+}
+
+
+
+// === GetMovieJpegVRAMHPixelsSize_FW @ ff8c4178 ===
+// Signature: undefined4 GetMovieJpegVRAMHPixelsSize_FW(void);
+
+undefined4 GetMovieJpegVRAMHPixelsSize_FW(void)
+
+{
+  return *(undefined4 *)(DAT_ff8c3d04 + 4);
+}
+
+
+
+// === GetMovieJpegVRAMVPixelsSize_FW @ ff8c4184 ===
+// Signature: undefined4 GetMovieJpegVRAMVPixelsSize_FW(void);
+
+undefined4 GetMovieJpegVRAMVPixelsSize_FW(void)
+
+{
+  return *(undefined4 *)(DAT_ff8c3d04 + 8);
+}
+
+
+
+// === StopContinuousVRAMData_FW @ ff8c425c ===
+// Signature: undefined4 StopContinuousVRAMData_FW(undefined4 param_1,undefined4 param_2,undefined4 param_3,undefined4 param_4);
+
+/* WARNING: Removing unreachable block (ram,0xff827518) */
+
+undefined4
+StopContinuousVRAMData_FW
+          (undefined4 param_1,undefined4 param_2,undefined4 param_3,undefined4 param_4)
+
+{
+  int iVar1;
+  uint uVar2;
+  
+  iVar1 = DAT_ff8c43f4;
+  *(undefined4 *)(DAT_ff8c43f4 + 0xa0) = 0;
+  *(undefined4 *)(iVar1 + 0x120) = 0;
+  *(undefined4 *)(iVar1 + 0xa4) = 0;
+  *(undefined4 *)(iVar1 + 0x54) = 0;
+  *(undefined4 *)(iVar1 + 0x5c) = 4;
+  uVar2 = *(uint *)(iVar1 + 0xb8);
+  if (0 < *(int *)*DAT_ff827560) {
+    switchD_ff8443f8::default(s_KerSem_c_ff827564,DAT_ff827574,param_3,param_4,param_3,param_4);
+  }
+  if (0 < *DAT_ff827578) {
+    switchD_ff8443f8::default(s_KerSem_c_ff827564,DAT_ff82757c);
+  }
+  if (((uVar2 & 1) - 1 & uVar2) != 0) {
+    iVar1 = FUN_ff812374(uVar2 >> 1,0);
+    if (iVar1 == -4) {
+      return 0xb;
+    }
+    if (iVar1 == -2) {
+      return 9;
+    }
+    if (iVar1 == 0) {
+      return 0;
+    }
+    switchD_ff8443f8::default(s_KerSem_c_ff827564,DAT_ff827580);
+  }
+  return 7;
+}
+
+
+
+// === StartEVFMovVGA_FW @ ff9e8944 ===
+// Signature: bool StartEVFMovVGA_FW(undefined4 param_1,undefined4 param_2,undefined4 param_3,undefined4 param_4);
+
+bool StartEVFMovVGA_FW(undefined4 param_1,undefined4 param_2,undefined4 param_3,undefined4 param_4)
+
+{
+  undefined4 *puVar1;
+  undefined4 uVar2;
+  uint uVar3;
+  bool bVar4;
+  undefined4 local_20;
+  undefined4 local_1c;
+  undefined4 local_18;
+  undefined4 local_14;
+  
+  local_1c = 0x1e;
+  local_20 = 2;
+  local_18 = param_3;
+  local_14 = param_4;
+  FUN_ff8c4c60();
+  FUN_ff8716a0(0xa6,&local_1c,4);
+  FUN_ff8716a0(0xa9,&local_20,2);
+  FUN_ff8a8e8c(9);
+  uVar2 = FUN_ff827904(0,0);
+  puVar1 = DAT_ff9e8a00;
+  *DAT_ff9e8a00 = uVar2;
+  local_18 = 0x280;
+  local_14 = 0x1e0;
+  FUN_ff8c3c64(&LAB_ff9e87a8,0,&local_18,local_1c);
+  uVar3 = FUN_ff869330(*puVar1,1,DAT_ff9e8a04);
+  bVar4 = (uVar3 & 1) == 0;
+  if (bVar4) {
+    FUN_ff869250(*puVar1);
+  }
+  else {
+    switchD_ff8443f8::default(s_LiveImageTool_c_ff9e8a0c,DAT_ff9e8a20);
+  }
+  return !bVar4;
+}
+
+
+
+// === StartEVFMovQVGA60_FW @ ff9e8a24 ===
+// Signature: bool StartEVFMovQVGA60_FW(undefined4 param_1,undefined4 param_2,undefined4 param_3,undefined4 param_4);
+
+bool StartEVFMovQVGA60_FW
+               (undefined4 param_1,undefined4 param_2,undefined4 param_3,undefined4 param_4)
+
+{
+  undefined4 *puVar1;
+  undefined4 uVar2;
+  uint uVar3;
+  bool bVar4;
+  undefined4 local_20;
+  undefined4 local_1c;
+  undefined4 local_18;
+  undefined4 local_14;
+  
+  local_1c = 0x3c;
+  local_20 = 1;
+  local_18 = param_3;
+  local_14 = param_4;
+  FUN_ff8c4c60();
+  FUN_ff8716a0(0xa6,&local_1c,4);
+  FUN_ff8716a0(0xa9,&local_20,2);
+  FUN_ff8a8e8c(9);
+  uVar2 = FUN_ff827904(0,0);
+  puVar1 = DAT_ff9e8a00;
+  *DAT_ff9e8a00 = uVar2;
+  local_18 = 0x140;
+  local_14 = 0xf0;
+  FUN_ff8c3c64(&LAB_ff9e87a8,0,&local_18,0x3c);
+  uVar3 = FUN_ff869330(*puVar1,1,DAT_ff9e8a04);
+  bVar4 = (uVar3 & 1) == 0;
+  if (bVar4) {
+    FUN_ff869250(*puVar1);
+  }
+  else {
+    switchD_ff8443f8::default(s_LiveImageTool_c_ff9e8a0c,DAT_ff9e8f24);
+  }
+  return !bVar4;
+}
+
+
+
+// === StartEVFMovXGA_FW @ ff9e8c58 ===
+// Signature: bool StartEVFMovXGA_FW(undefined4 param_1,undefined4 param_2,undefined4 param_3,undefined4 param_4);
+
+bool StartEVFMovXGA_FW(undefined4 param_1,undefined4 param_2,undefined4 param_3,undefined4 param_4)
+
+{
+  undefined4 *puVar1;
+  undefined4 uVar2;
+  undefined4 uVar3;
+  uint uVar4;
+  bool bVar5;
+  undefined4 local_20;
+  undefined4 local_1c;
+  undefined4 local_18;
+  undefined4 local_14;
+  
+  uVar2 = DAT_ff9e8f30;
+  local_1c = 0x1e;
+  local_20 = 3;
+  local_18 = param_3;
+  local_14 = param_4;
+  FUN_ff8c4c60();
+  FUN_ff8716a0(0xa6,&local_1c,4);
+  FUN_ff8716a0(0xa9,&local_20,2);
+  FUN_ff8a8e8c(9);
+  uVar3 = FUN_ff827904(0,0);
+  puVar1 = DAT_ff9e8a00;
+  *DAT_ff9e8a00 = uVar3;
+  local_18 = 0;
+  local_14 = 0;
+  FUN_ff8c3c64(uVar2,0,&local_18,local_1c);
+  uVar4 = FUN_ff869330(*puVar1,1,DAT_ff9e8a04);
+  bVar5 = (uVar4 & 1) == 0;
+  if (bVar5) {
+    FUN_ff869250(*puVar1);
+  }
+  else {
+    switchD_ff8443f8::default(s_LiveImageTool_c_ff9e8a0c,DAT_ff9e8f34);
+  }
+  return !bVar5;
+}
+
+
+
+// === StartEVFMovHD_FW @ ff9e8d10 ===
+// Signature: bool StartEVFMovHD_FW(undefined4 param_1,undefined4 param_2,undefined4 param_3,undefined4 param_4);
+
+bool StartEVFMovHD_FW(undefined4 param_1,undefined4 param_2,undefined4 param_3,undefined4 param_4)
+
+{
+  undefined4 *puVar1;
+  undefined4 uVar2;
+  undefined4 uVar3;
+  uint uVar4;
+  bool bVar5;
+  undefined4 local_20;
+  undefined4 local_1c;
+  undefined4 local_18;
+  undefined4 local_14;
+  
+  uVar2 = DAT_ff9e8f30;
+  local_1c = 0x1e;
+  local_20 = 3;
+  local_18 = param_3;
+  local_14 = param_4;
+  FUN_ff8c4c60();
+  FUN_ff8716a0(0xa6,&local_1c,4);
+  FUN_ff8716a0(0xa9,&local_20,2);
+  FUN_ff8a8e8c(9);
+  uVar3 = FUN_ff827904(0,0);
+  puVar1 = DAT_ff9e8a00;
+  *DAT_ff9e8a00 = uVar3;
+  local_18 = 0;
+  local_14 = 0;
+  FUN_ff8c3c64(uVar2,0,&local_18,local_1c);
+  uVar4 = FUN_ff869330(*puVar1,1,DAT_ff9e8a04);
+  bVar5 = (uVar4 & 1) == 0;
+  if (bVar5) {
+    FUN_ff869250(*puVar1);
+  }
+  else {
+    switchD_ff8443f8::default(s_LiveImageTool_c_ff9e8a0c,DAT_ff9e8f38);
+  }
+  return !bVar5;
+}
+
+
+
+// === StopEVF_FW @ ff9e8dc8 ===
+// Signature: undefined4 StopEVF_FW(void);
+
+undefined4 StopEVF_FW(void)
+
+{
+  FUN_ff8c391c();
+  return 0;
+}
+
+
+
