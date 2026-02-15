@@ -31,9 +31,12 @@
 #include "tje.h"
 #include "shutdown.h"
 
-// Maximum JPEG output buffer size.
-// Hardware encoder can produce larger frames than software at higher quality.
+// Maximum JPEG output buffer size (software fallback path).
 #define JPEG_BUF_SIZE       (256 * 1024)
+
+// Raw UYVY frame size: 640 x 480 x 2 bytes/pixel = 614,400 bytes.
+// This is the size of the uncompressed video frame from the ISP pipeline.
+#define UYVY_BUF_SIZE       (640 * 480 * 2)
 
 // ============================================================
 // Hardware MJPEG VRAM buffer constants (from Ghidra RE of FUN_ffaa2224)
@@ -64,6 +67,28 @@
 #define FW_GetMovieJpegVRAMVPixelsSize      ((void *)0xFF8C4184)
 #define FW_StopContinuousVRAMData           ((void *)0xFF8C425C)
 
+// JPCORE power/clock management (discovered via Ghidra RE of FUN_ff8eeb6c)
+// FUN_ff8eeb6c is a ref-counted power-on that calls three sub-functions
+// on first invocation:
+//   FUN_ff815288(0) — JPCORE clock/power gate enable
+//   FUN_ff8152e8()  — additional clock domain enable
+//   FUN_ff8ef6b4()  — JPCORE subsystem init (DMA, interrupts, buffers)
+// BUT: FUN_ff8eeb6c checks *(0x8028)==0 first and returns early if so.
+// If the JPCORE module wasn't loaded at boot, this flag is 0 and the
+// function is a complete no-op — explaining why JPCORE never encodes.
+#define FW_JPCORE_PowerInit                 ((void *)0xFF8EEB6C)
+#define FW_JPCORE_PowerDeinit               ((void *)0xFF8EEBC8)
+#define FW_JPCORE_ClockEnable               ((void *)0xFF815288)
+#define FW_JPCORE_ClockEnable2              ((void *)0xFF8152E8)
+#define FW_JPCORE_SubsystemInit             ((void *)0xFF8EF6B4)
+
+// JPCORE power struct at RAM 0x8028 (from ROM literal DAT_ff8eec70)
+// Offset 0x00: init flag (must be !=0 for FUN_ff8eeb6c to proceed)
+// Offset 0x04: semaphore handle
+// Offset 0x10: secondary flag
+// Offset 0x14: ref count
+#define JPCORE_POWER_STRUCT ((volatile unsigned int *)0x00008028)
+
 // Module state
 static int webcam_active = 0;
 static int webcam_jpeg_quality = 50;
@@ -83,6 +108,11 @@ static int jpeg_buf_ready = -1;     // Index of the buffer ready for reading (-1
 static unsigned int frame_count = 0;
 static unsigned int last_frame_tick = 0;
 static int current_fps = 0;
+
+// Raw UYVY streaming state
+static unsigned char *uyvy_buf = 0;        // Copy buffer for raw UYVY frames
+static unsigned int frame_format = 0;       // WEBCAM_FMT_JPEG or WEBCAM_FMT_UYVY
+static unsigned int last_cb_count_raw = 0;  // rec_cb_count at last raw capture (stale detection)
 
 // Captured frame dimensions
 static unsigned int frame_width = 0;
@@ -297,6 +327,41 @@ static int hw_mjpeg_start(void)
 
     if (hw_mjpeg_active) return 0;
 
+    // ================================================================
+    // JPCORE POWER / CLOCK INITIALIZATION
+    //
+    // The JPCORE hardware block needs to be powered and clocked before
+    // it can encode frames.  FUN_ff8eeb6c is the firmware's ref-counted
+    // power-on function, but it checks *(0x8028)!=0 first and returns
+    // early if the JPCORE subsystem module wasn't initialized at boot.
+    //
+    // Strategy:
+    //   1. Try FUN_ff8eeb6c() (proper ref-counted path)
+    //   2. If *(0x8028)==0 (no-op), call the three sub-functions directly:
+    //      FUN_ff815288(0)  — clock/power gate
+    //      FUN_ff8152e8()   — clock domain 2
+    //      FUN_ff8ef6b4()   — JPCORE subsystem init
+    // ================================================================
+    {
+        volatile unsigned int *jpwr = JPCORE_POWER_STRUCT;
+        unsigned int init_flag = jpwr[0];
+        unsigned int ref_count = jpwr[5];  // offset 0x14
+
+        // Try the firmware's ref-counted path first
+        call_func_ptr(FW_JPCORE_PowerInit, 0, 0);
+
+        // Check if it actually did anything
+        if (init_flag == 0) {
+            // FUN_ff8eeb6c was a no-op because the JPCORE module wasn't
+            // initialized.  Call the three hardware init functions directly.
+            unsigned int args_0[1] = { 0 };
+            call_func_ptr(FW_JPCORE_ClockEnable, args_0, 1);
+            call_func_ptr(FW_JPCORE_ClockEnable2, 0, 0);
+            call_func_ptr(FW_JPCORE_SubsystemInit, 0, 0);
+            msleep(50);  // Let hardware stabilize after power-on
+        }
+    }
+
     // Activate the JPCORE hardware encoder.
     // Sets state[+0x48] = 1 (MJPEG active flag).
     // Requires state[+0xEC] == 1 (pipeline ready), which is set by
@@ -341,25 +406,18 @@ static int hw_mjpeg_start(void)
         for (si = 0; si < 16; si++) spy[si] = 0;
     }
 
-    // Wait for JPCORE to start encoding.
-    // PS3 completion mask at (0x8224 + 0x0C):
-    //   Bit 0: set only if JPCORE_DMA_Start FAILED (returns 1)
-    //   Bit 1: always set (pre-JPCORE flag)
-    //   Bit 2: always set (post-processing flag)
-    //   mask == 6 (bits 1,2) = JPCORE started successfully
-    //   mask == 7 = JPCORE_DMA_Start failed
-    // Also check piVar1[3] at (0x2554 + 0x0C = 0x2560):
-    //   piVar1[3] == 1 means JPCORE DMA is active.
-    for (retries = 0; retries < 40; retries++) {
+    // Wait for pipeline to start.
+    // For raw UYVY streaming, we just need rec_callback_spy to fire
+    // (rec_cb_count > 0). Also accept JPCORE ready as a break condition.
+    for (retries = 0; retries < 20; retries++) {
         msleep(100);
+        if (rec_cb_count > 0) break;  // Callback firing — pipeline active
         {
             volatile unsigned int *ps3 = (volatile unsigned int *)0x00008224;
             volatile unsigned int *jpcore = (volatile unsigned int *)0x00002554;
-            unsigned int cmask = ps3[3];     // +0x0C completion bitmask
-            unsigned int active = jpcore[3]; // piVar1[3] DMA active
-            if ((cmask & 6) == 6 && active == 1) {
-                break;  // JPCORE pipeline is running
-            }
+            unsigned int cmask = ps3[3];
+            unsigned int active = jpcore[3];
+            if ((cmask & 6) == 6 && active == 1) break;
         }
     }
 
@@ -397,7 +455,17 @@ static int hw_mjpeg_start(void)
         DIAG_U32(48, *(volatile unsigned int *)0x0007228C); // JPCORE enable
         DIAG_U32(52, *(volatile unsigned int *)0x000051E4); // movie_status
         DIAG_U32(56, (unsigned int)retries);                // wait retries used
-        DIAG_U32(60, 0);
+        {
+            volatile unsigned int *jpwr = JPCORE_POWER_STRUCT;
+            // Pack JPCORE power struct state into one diagnostic word:
+            // bits 0-7:  init flag (jpwr[0])
+            // bits 8-15: ref count (jpwr[5], offset 0x14)
+            // bits 16-23: secondary flag (jpwr[4], offset 0x10)
+            // bits 24-31: 0xAB marker
+            DIAG_U32(60, 0xAB000000 | ((jpwr[4] & 0xFF) << 16)
+                                     | ((jpwr[5] & 0xFF) << 8)
+                                     | (jpwr[0] & 0xFF));
+        }
         for (i = 0; i < 16; i++) hw_diag[64 + i] = HW_MJPEG_VRAM_ADDR[i];
         val = call_func_ptr(FW_MjpegActiveCheck, 0, 0);
         DIAG_U32(80, val);
@@ -486,7 +554,7 @@ static int hw_mjpeg_start(void)
             }
             DIAG_U32(248, soi_off);
         }
-        DIAG_U32(252, 0);
+        DIAG_U32(252, *(volatile unsigned int *)0xC0F110C4);  // ISP source select (4=EVF, 5=VIDEO)
 
         #undef DIAG_U32
         hw_diag_len = HW_DIAG_SIZE;
@@ -519,6 +587,9 @@ static void hw_mjpeg_stop(void)
 
     // Stop the JPCORE hardware encoder.
     call_func_ptr(FW_StopMjpegMaking, 0, 0);
+
+    // Power down JPCORE (ref-counted, matches PowerInit call in start)
+    call_func_ptr(FW_JPCORE_PowerDeinit, 0, 0);
 
     // Wait for pipeline to settle
     {
@@ -761,23 +832,23 @@ static int hw_mjpeg_get_frame(void)
             }
         }
 
-        // ---- Block 6 (384-447): Extended state ----
-        DIAG_U32(384, (unsigned int)gf_rc);  // GCMJVD return
+        // ---- Block 6 (384-455): ISP routing + dispatch state ----
+        DIAG_U32(384, *(volatile unsigned int *)0xC0F110C4);  // ISP source select (4=EVF, 5=VIDEO)
         DIAG_U32(388, hw_frame_index);
-        DIAG_U32(392, s[0x10/4]);
-        DIAG_U32(396, s[0x14/4]);
-        DIAG_U32(400, s[0x18/4]);
-        DIAG_U32(404, s[0x1C/4]);
-        DIAG_U32(408, s[0x20/4]);
-        DIAG_U32(412, s[0x24/4]);
-        DIAG_U32(416, s[0x28/4]);
-        DIAG_U32(420, s[0x2C/4]);
-        DIAG_U32(424, s[0x30/4]);
-        DIAG_U32(428, s[0x34/4]);
-        DIAG_U32(432, s[0x38/4]);
-        DIAG_U32(436, s[0x3C/4]);
-        DIAG_U32(440, s[0x40/4]);
-        DIAG_U32(444, s[0x44/4]);
+        DIAG_U32(392, *(volatile unsigned int *)0xC0F111C4);  // ISP scaling factor
+        DIAG_U32(396, *(volatile unsigned int *)0xC0F111C0);  // ISP enable (should be 1)
+        DIAG_U32(400, *(volatile unsigned int *)0xC0F111C8);  // ISP special config
+        DIAG_U32(404, *(volatile unsigned int *)0xC0F0103C);  // JPCORE enable reg
+        DIAG_U32(408, *(volatile unsigned int *)0x0000B8C0);  // dispatch path (1=EVF, 2=video)
+        DIAG_U32(412, s[0xD4/4]);   // video mode (should be 2 for video dispatch)
+        DIAG_U32(416, s[0x48/4]);   // MJPEG active
+        DIAG_U32(420, s[0xF0/4]);   // frame skip / pipeline state
+        DIAG_U32(424, s[0xEC/4]);   // pipeline active
+        DIAG_U32(428, (unsigned int)gf_rc);   // GCMJVD return
+        DIAG_U32(432, *(volatile unsigned int *)0x0003F298);  // secondary state +4 (written by ff8c335c)
+        DIAG_U32(436, *(volatile unsigned int *)0x0003F29C);  // secondary state +8
+        DIAG_U32(440, s[0x6C/4]);   // rec buffer (must be !=0 for callback data)
+        DIAG_U32(444, s[0x114/4]);  // rec callback 1 (our spy)
         DIAG_U32(448, s[0x100/4]);
         DIAG_U32(452, s[0x104/4]);
 
@@ -814,10 +885,15 @@ static int hw_mjpeg_get_frame(void)
         DIAG_U32(540, hw_fail_eoi);          // EOI failure count
         DIAG_U32(544, hw_fail_total);        // total failures
         DIAG_U32(548, hw_frame_index);       // frames captured (false positives removed)
-        // 552-575: reserved
+        // 552-575: JPCORE power struct @ 0x8028
         {
-            int ri;
-            for (ri = 552; ri < 576; ri += 4) DIAG_U32(ri, 0);
+            volatile unsigned int *jpwr = JPCORE_POWER_STRUCT;
+            DIAG_U32(552, jpwr[0]);     // init flag (must be !=0)
+            DIAG_U32(556, jpwr[1]);     // semaphore handle
+            DIAG_U32(560, jpwr[4]);     // secondary flag (offset 0x10)
+            DIAG_U32(564, jpwr[5]);     // ref count (offset 0x14)
+            DIAG_U32(568, jpwr[2]);     // offset 0x08
+            DIAG_U32(572, jpwr[3]);     // offset 0x0C
         }
 
         #undef DIAG_U32
@@ -977,86 +1053,85 @@ static int capture_and_compress_frame_sw(void)
 }
 
 // ============================================================
-// Unified frame capture (hardware or software)
+// Raw UYVY capture (zero encoding, PC-side conversion)
+// ============================================================
+
+// Capture a raw 640x480 UYVY frame from the video pipeline callback.
+// The rec_callback_spy (installed by hw_mjpeg_start) provides the frame
+// buffer address in rec_cb_arg2 at 30fps. We copy the raw UYVY data
+// to our own buffer for PTP transfer — the PC bridge converts to RGB.
+//
+// Returns UYVY_BUF_SIZE (614400) on success, 0 if no new frame available.
+static int capture_frame_uyvy(void)
+{
+    unsigned int cb_cnt, cb_addr;
+
+    cb_cnt = rec_cb_count;
+    if (cb_cnt == 0) return 0;              // Callback hasn't fired yet
+    if (cb_cnt == last_cb_count_raw) return 0; // Same frame as last time
+
+    cb_addr = rec_cb_arg2;
+    if (cb_addr < 0x40010000 || cb_addr >= 0x44000000) return 0;
+
+    last_cb_count_raw = cb_cnt;
+
+    if (!uyvy_buf) {
+        uyvy_buf = malloc(UYVY_BUF_SIZE);
+        if (!uyvy_buf) return 0;
+    }
+
+    // Copy 614KB UYVY from uncached DMA buffer to our private buffer.
+    // Use word-aligned copy for performance (~3ms vs ~16ms byte-by-byte).
+    // Source is uncached RAM (0x40xxxxxx) — guaranteed fresh, no cache
+    // coherency issues with DMA.
+    {
+        const unsigned int *src = (const unsigned int *)cb_addr;
+        unsigned int *dst = (unsigned int *)uyvy_buf;
+        unsigned int i, n = UYVY_BUF_SIZE / 4;
+        for (i = 0; i < n; i++) dst[i] = src[i];
+    }
+
+    frame_width = 640;
+    frame_height = 480;
+    frame_format = WEBCAM_FMT_UYVY;
+
+    return UYVY_BUF_SIZE;
+}
+
+// ============================================================
+// Unified frame capture (raw UYVY > hardware JPEG > software JPEG)
 // ============================================================
 
 // Capture a frame using the best available method.
-// Returns the size of the compressed JPEG, or 0 on error.
+// Returns frame size on success, 0 on error.
 static int capture_frame(void)
 {
-    int jpeg_size = 0;
+    int size;
 
-    // Try hardware encoder first
-    if (hw_mjpeg_available) {
-        // If hardware has failed too many times, disable it and fall through
-        // to the software path.
-        if (hw_fail_total >= HW_FAIL_FALLBACK_THRESHOLD) {
-            // Do NOT call hw_mjpeg_stop() here! It restores state[+0xD4]=1
-            // and calls StopMjpegMaking, which kills the video pipeline.
-            // The viewport buffer stops updating, LCD goes black, and the
-            // software path gets only stale frames forever.
-            // Just disable the HW flag and let the pipeline keep running.
-            // hw_mjpeg_stop() is called later in webcam_stop() for cleanup.
-            hw_mjpeg_available = 0;
-            // Allocate software buffers on first fallback
-            {
-                int i;
-                for (i = 0; i < NUM_JPEG_BUFS; i++) {
-                    if (!jpeg_buf[i]) {
-                        jpeg_buf[i] = malloc(JPEG_BUF_SIZE);
-                    }
-                }
-            }
-        } else {
-            jpeg_size = hw_mjpeg_get_frame();
-            if (jpeg_size > 0) {
-                // Hardware path succeeded — update frame counter and FPS
-                frame_count++;
-                {
-                    unsigned int now = get_tick_count();
-                    if (last_frame_tick > 0 && now > last_frame_tick) {
-                        int delta = now - last_frame_tick;
-                        if (delta > 0) {
-                            int instant_fps = 1000 / delta;
-                            current_fps = (current_fps * 7 + instant_fps * 3) / 10;
-                        }
-                    }
-                    last_frame_tick = now;
-                }
-                return jpeg_size;
-            }
-            return 0;
-        }
-    }
-
-    // Software fallback path
-    jpeg_size = capture_and_compress_frame_sw();
-
-    // Update Block 8 with SW path diagnostics every call (overwrite HW data)
-    {
-        #define DIAG_U32(off, v) do { \
-            hw_diag[(off)]   = (v);       hw_diag[(off)+1] = (v)>>8; \
-            hw_diag[(off)+2] = (v)>>16;   hw_diag[(off)+3] = (v)>>24; \
-        } while(0)
-        DIAG_U32(512, sw_total_calls);
-        DIAG_U32(516, sw_fail_null);
-        DIAG_U32(520, sw_fail_stale);
-        DIAG_U32(524, sw_fail_encode);
-        DIAG_U32(528, sw_last_vp_addr);
-        DIAG_U32(532, last_vp_checksum);
-        DIAG_U32(536, frame_count);
-        DIAG_U32(540, (unsigned int)jpeg_size);
-        DIAG_U32(544, 0x53570000 | (hw_mjpeg_available ? 1 : 0));  // "SW" marker
-        DIAG_U32(548, hw_fail_total);
+    // Fast path: raw UYVY from video pipeline (zero encoding overhead).
+    // Available once rec_callback_spy starts firing (~100ms after start).
+    size = capture_frame_uyvy();
+    if (size > 0) {
+        frame_count++;
         {
-            int ri;
-            for (ri = 552; ri < 576; ri += 4) DIAG_U32(ri, 0);
+            unsigned int now = get_tick_count();
+            if (last_frame_tick > 0 && now > last_frame_tick) {
+                int delta = now - last_frame_tick;
+                if (delta > 0) {
+                    int instant_fps = 1000 / delta;
+                    current_fps = (current_fps * 7 + instant_fps * 3) / 10;
+                }
+            }
+            last_frame_tick = now;
         }
-        #undef DIAG_U32
-        hw_diag_len = HW_DIAG_SIZE;
+        return size;
     }
 
-    if (jpeg_size > 0) {
+    // Fallback: software JPEG encoding (if raw path not yet available)
+    size = capture_and_compress_frame_sw();
+    frame_format = WEBCAM_FMT_JPEG;
+
+    if (size > 0) {
         frame_count++;
         {
             unsigned int now = get_tick_count();
@@ -1071,7 +1146,7 @@ static int capture_frame(void)
         }
     }
 
-    return jpeg_size;
+    return size;
 }
 
 // ============================================================
@@ -1136,6 +1211,10 @@ static int webcam_start(int jpeg_quality)
     hw_jpeg_size = 0;
     hw_frame_index = 0;
 
+    // Reset raw UYVY state
+    frame_format = WEBCAM_FMT_JPEG;
+    last_cb_count_raw = 0;
+
     // Switch camera to video mode
     if (switch_to_video_mode() < 0) {
         webcam_active = 0;
@@ -1198,6 +1277,12 @@ static int webcam_stop(void)
     hw_mjpeg_stop();
     hw_mjpeg_available = 0;
 
+    // Free raw UYVY buffer
+    if (uyvy_buf) {
+        free(uyvy_buf);
+        uyvy_buf = 0;
+    }
+
     // Free software encoder buffers
     for (i = 0; i < NUM_JPEG_BUFS; i++) {
         if (jpeg_buf[i]) {
@@ -1223,30 +1308,31 @@ static int webcam_stop(void)
 
 static int webcam_get_frame(webcam_frame_t *frame)
 {
-    int jpeg_size;
+    int size;
 
     if (!webcam_active || !frame) {
         return -1;
     }
 
-    // Capture a new frame (hardware or software)
-    jpeg_size = capture_frame();
+    // Capture a new frame
+    size = capture_frame();
 
-    if (jpeg_size <= 0) {
+    if (size <= 0) {
         return -1;
     }
 
-    if (hw_mjpeg_available && hw_jpeg_data && hw_jpeg_size > 0) {
-        // Hardware path: return the firmware-provided JPEG buffer directly
-        frame->data = hw_jpeg_data;
-        frame->size = hw_jpeg_size;
+    // Raw UYVY path (primary)
+    if (frame_format == WEBCAM_FMT_UYVY && uyvy_buf) {
+        frame->data = uyvy_buf;
+        frame->size = UYVY_BUF_SIZE;
         frame->width = frame_width;
         frame->height = frame_height;
         frame->frame_num = frame_count;
+        frame->format = WEBCAM_FMT_UYVY;
         return 0;
     }
 
-    // Software path: return the double-buffered JPEG
+    // Software JPEG fallback
     if (jpeg_buf_ready < 0) {
         return -1;
     }
@@ -1256,6 +1342,7 @@ static int webcam_get_frame(webcam_frame_t *frame)
     frame->width = frame_width;
     frame->height = frame_height;
     frame->frame_num = frame_count;
+    frame->format = WEBCAM_FMT_JPEG;
 
     return 0;
 }

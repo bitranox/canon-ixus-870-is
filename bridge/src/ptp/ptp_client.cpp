@@ -498,6 +498,19 @@ bool PTPClient::start_webcam(int quality) {
                 u32(52) == 1 ? "(=1, STOPPED)" :
                 u32(52) == 5 ? "(=5, STOPPING)" : "");
         fprintf(stderr, "  wait retries used       = %u / 40\n", u32(56));
+        {
+            uint32_t jpwr_packed = u32(60);
+            if ((jpwr_packed >> 24) == 0xAB) {
+                uint32_t init_flag = jpwr_packed & 0xFF;
+                uint32_t ref_count = (jpwr_packed >> 8) & 0xFF;
+                uint32_t sec_flag = (jpwr_packed >> 16) & 0xFF;
+                fprintf(stderr, "  JPCORE POWER @0x8028:\n");
+                fprintf(stderr, "    init flag            = %u  %s\n", init_flag,
+                        init_flag ? "(ok)" : "*** NOT INITIALIZED! FUN_ff8eeb6c is NO-OP! ***");
+                fprintf(stderr, "    ref count            = %u\n", ref_count);
+                fprintf(stderr, "    secondary flag       = %u\n", sec_flag);
+            }
+        }
         fprintf(stderr, "  VRAM@0x40EA23D0: ");
         for (int i = 64; i < 80 && i < (int)dummy.size(); i++)
             fprintf(stderr, "%02X ", dummy[i]);
@@ -534,6 +547,11 @@ bool PTPClient::start_webcam(int quality) {
                 fprintf(stderr, "  SOI scan in piVar1[4]: NOT FOUND in 8KB\n");
             else
                 fprintf(stderr, "  SOI scan in piVar1[4]: FOUND at offset %u\n", soi_off);
+            uint32_t isp_src = u32(252);
+            fprintf(stderr, "  ISP src 0xC0F110C4     = 0x%08X  %s\n", isp_src,
+                    isp_src == 5 ? "(=5, VIDEO — JPCORE routed!)" :
+                    isp_src == 4 ? "*** =4, EVF — JPCORE NOT routed! ***" :
+                    "(unknown)");
         }
         fprintf(stderr, "=== END DMA CHAIN DIAGNOSTICS ===\n\n");
     }
@@ -726,15 +744,40 @@ bool PTPClient::get_frame(MJPEGFrame& frame) {
                     }
                 }
 
-                // ---- Block 6 (384-455): Extended state ----
+                // ---- Block 6 (384-455): ISP routing + dispatch state ----
                 if (data.size() >= 456) {
-                    fprintf(stderr, "  --- Block 6: Extended ---\n");
-                    fprintf(stderr, "    GCMJVD return        = %d\n", (int)u32(384));
+                    fprintf(stderr, "  --- Block 6: ISP Routing + Dispatch ---\n");
+                    uint32_t isp_src = u32(384);
+                    fprintf(stderr, "    ISP src 0xC0F110C4   = 0x%08X  %s\n", isp_src,
+                            isp_src == 5 ? "(=5, VIDEO — JPCORE routed!)" :
+                            isp_src == 4 ? "*** =4, EVF — JPCORE NOT routed! ***" :
+                            "(unknown)");
                     fprintf(stderr, "    hw_frame_index       = %u\n", u32(388));
-                    fprintf(stderr, "    state+0x10..0x44:   ");
-                    for (int i = 392; i <= 444; i += 4)
-                        fprintf(stderr, " %08X", u32(i));
-                    fprintf(stderr, "\n");
+                    fprintf(stderr, "    ISP scale 0xC0F111C4 = 0x%08X\n", u32(392));
+                    fprintf(stderr, "    ISP en 0xC0F111C0    = 0x%08X  %s\n", u32(396),
+                            u32(396) == 1 ? "(enabled)" : "");
+                    fprintf(stderr, "    ISP cfg 0xC0F111C8   = 0x%08X\n", u32(400));
+                    uint32_t jpcore_en = u32(404);
+                    fprintf(stderr, "    JPCORE en 0xC0F0103C = 0x%08X  %s\n", jpcore_en,
+                            (jpcore_en & 0x10000) ? "(enabled)" : "*** DISABLED! ***");
+                    uint32_t dispatch = u32(408);
+                    fprintf(stderr, "    dispatch @0xB8C0     = %u  %s\n", dispatch,
+                            dispatch == 2 ? "(VIDEO path)" :
+                            dispatch == 1 ? "*** EVF path! ***" :
+                            "(unknown)");
+                    fprintf(stderr, "    video mode +0xD4     = %u  %s\n", u32(412),
+                            u32(412) == 2 ? "(VGA video)" :
+                            u32(412) == 1 ? "*** EVF! ***" : "");
+                    fprintf(stderr, "    MJPEG active +0x48   = %u\n", u32(416));
+                    fprintf(stderr, "    frame skip +0xF0     = %u  %s\n", u32(420),
+                            u32(420) == 1 ? "(=1, ok)" : "");
+                    fprintf(stderr, "    pipeline +0xEC       = %u\n", u32(424));
+                    fprintf(stderr, "    GCMJVD return        = %d\n", (int)u32(428));
+                    fprintf(stderr, "    sec_state+4          = 0x%08X\n", u32(432));
+                    fprintf(stderr, "    sec_state+8          = 0x%08X\n", u32(436));
+                    fprintf(stderr, "    rec buf +0x6C        = 0x%08X  %s\n", u32(440),
+                            u32(440) == 0 ? "(=0, NO callback data!)" : "(has buffer)");
+                    fprintf(stderr, "    rec cb1 +0x114       = 0x%08X\n", u32(444));
                     fprintf(stderr, "    state+0x100          = 0x%08X\n", u32(448));
                     fprintf(stderr, "    state+0x104          = 0x%08X\n", u32(452));
                 }
@@ -787,6 +830,23 @@ bool PTPClient::get_frame(MJPEGFrame& frame) {
                         fprintf(stderr, "    hw_fail_total        = %u\n", u32(544));
                         fprintf(stderr, "    hw_frame_index       = %u\n", u32(548));
                     }
+                    // JPCORE power struct @ 0x8028 (bytes 552-575, added in v14)
+                    if (data.size() >= 576) {
+                        uint32_t pwr_init = u32(552);
+                        uint32_t pwr_sem = u32(556);
+                        uint32_t pwr_sec = u32(560);
+                        uint32_t pwr_ref = u32(564);
+                        if (pwr_init != 0 || pwr_sem != 0 || pwr_ref != 0) {
+                            fprintf(stderr, "  --- JPCORE Power @0x8028 ---\n");
+                            fprintf(stderr, "    init flag            = %u  %s\n", pwr_init,
+                                    pwr_init ? "(ok)" : "*** NOT INITIALIZED! ***");
+                            fprintf(stderr, "    semaphore            = 0x%08X\n", pwr_sem);
+                            fprintf(stderr, "    secondary flag       = %u\n", pwr_sec);
+                            fprintf(stderr, "    ref count            = %u\n", pwr_ref);
+                            fprintf(stderr, "    offset 0x08          = 0x%08X\n", u32(568));
+                            fprintf(stderr, "    offset 0x0C          = 0x%08X\n", u32(572));
+                        }
+                    }
                 }
             }
         }
@@ -798,7 +858,14 @@ bool PTPClient::get_frame(MJPEGFrame& frame) {
     frame.data = std::move(data);
     frame.width = (resp.num_params >= 2) ? resp.params[1] : 0;
     frame.height = (resp.num_params >= 3) ? resp.params[2] : 0;
-    frame.frame_num = (resp.num_params >= 4) ? resp.params[3] : 0;
+    // Format is encoded in high byte of param4, frame_num in low 24 bits
+    if (resp.num_params >= 4) {
+        frame.format = (resp.params[3] >> 24) & 0xFF;
+        frame.frame_num = resp.params[3] & 0x00FFFFFF;
+    } else {
+        frame.format = FRAME_FMT_JPEG;
+        frame.frame_num = 0;
+    }
 
     if (frame.data.empty()) {
         impl_->last_error = "empty frame data";

@@ -58,12 +58,17 @@ constexpr uint16_t PTP_TYPE_COMMAND  = 1;
 constexpr uint16_t PTP_TYPE_DATA    = 2;
 constexpr uint16_t PTP_TYPE_RESPONSE = 3;
 
-// MJPEG frame received from camera
+// Frame format identifiers (matches WEBCAM_FMT_* in webcam.h)
+constexpr uint32_t FRAME_FMT_JPEG = 0;
+constexpr uint32_t FRAME_FMT_UYVY = 1;
+
+// Frame received from camera (JPEG or raw UYVY)
 struct MJPEGFrame {
-    std::vector<uint8_t> data;  // JPEG data
+    std::vector<uint8_t> data;  // Frame data (JPEG or raw UYVY)
     uint32_t width;             // Frame width
     uint32_t height;            // Frame height
     uint32_t frame_num;         // Frame counter from camera
+    uint32_t format;            // FRAME_FMT_JPEG or FRAME_FMT_UYVY
 };
 
 // Connection info

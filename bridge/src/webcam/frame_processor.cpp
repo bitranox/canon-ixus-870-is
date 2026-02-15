@@ -178,6 +178,65 @@ void FrameProcessor::configure(const ProcessorConfig& config) {
     impl_->config = config;
 }
 
+bool FrameProcessor::process_uyvy(const uint8_t* uyvy_data, int data_size, int width, int height, RGBFrame& rgb_out) {
+    int expected = width * height * 2;
+    if (!uyvy_data || data_size < expected || width <= 0 || height <= 0) {
+        impl_->last_error = "Invalid UYVY data";
+        return false;
+    }
+
+    int out_stride = width * 3;
+    rgb_out.width = width;
+    rgb_out.height = height;
+    rgb_out.stride = out_stride;
+    rgb_out.data.resize(out_stride * height);
+
+    // Convert UYVY (U Y0 V Y1) to RGB using fixed-point BT.601.
+    // Each 4-byte UYVY macro-pixel produces 2 RGB pixels.
+    //
+    // IMPORTANT: Digic IV stores chroma as SIGNED bytes centered at 0,
+    // not unsigned centered at 128. The U and V bytes must be interpreted
+    // as signed char (-128..+127), NOT unsigned with 128 subtracted.
+    for (int y = 0; y < height; y++) {
+        const uint8_t* src = uyvy_data + y * width * 2;
+        uint8_t* dst = rgb_out.data.data() + y * out_stride;
+
+        for (int x = 0; x < width; x += 2) {
+            int u  = static_cast<int>(static_cast<int8_t>(src[0]));  // signed, centered at 0
+            int y0 = static_cast<int>(src[1]);
+            int v  = static_cast<int>(static_cast<int8_t>(src[2]));  // signed, centered at 0
+            int y1 = static_cast<int>(src[3]);
+            src += 4;
+
+            // Fixed-point BT.601: R = Y + 1.402*V, G = Y - 0.344*U - 0.714*V, B = Y + 1.772*U
+            int r0 = y0 + ((359 * v) >> 8);
+            int g0 = y0 - ((88 * u + 183 * v) >> 8);
+            int b0 = y0 + ((454 * u) >> 8);
+
+            int r1 = y1 + ((359 * v) >> 8);
+            int g1 = y1 - ((88 * u + 183 * v) >> 8);
+            int b1 = y1 + ((454 * u) >> 8);
+
+            dst[0] = static_cast<uint8_t>(r0 < 0 ? 0 : (r0 > 255 ? 255 : r0));
+            dst[1] = static_cast<uint8_t>(g0 < 0 ? 0 : (g0 > 255 ? 255 : g0));
+            dst[2] = static_cast<uint8_t>(b0 < 0 ? 0 : (b0 > 255 ? 255 : b0));
+            dst[3] = static_cast<uint8_t>(r1 < 0 ? 0 : (r1 > 255 ? 255 : r1));
+            dst[4] = static_cast<uint8_t>(g1 < 0 ? 0 : (g1 > 255 ? 255 : g1));
+            dst[5] = static_cast<uint8_t>(b1 < 0 ? 0 : (b1 > 255 ? 255 : b1));
+            dst += 6;
+        }
+    }
+
+    // Apply flips if configured
+    if (impl_->config.flip_horizontal || impl_->config.flip_vertical) {
+        impl_->flip_frame(rgb_out.data.data(), rgb_out.width, rgb_out.height,
+                          rgb_out.stride, impl_->config.flip_horizontal,
+                          impl_->config.flip_vertical);
+    }
+
+    return true;
+}
+
 bool FrameProcessor::process(const uint8_t* jpeg_data, int jpeg_size, RGBFrame& rgb_out) {
     if (!jpeg_data || jpeg_size <= 0) {
         impl_->last_error = "Invalid JPEG data";

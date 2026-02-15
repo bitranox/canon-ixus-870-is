@@ -10,13 +10,18 @@
 // Update version if changes are made to the module interface
 #define WEBCAM_VERSION          {1,0}
 
-// MJPEG frame info returned to callers
+// Frame format identifiers
+#define WEBCAM_FMT_JPEG  0      // JPEG compressed frame
+#define WEBCAM_FMT_UYVY  1      // Raw UYVY (YUV422) frame, 2 bytes per pixel
+
+// Frame info returned to callers
 typedef struct {
-    unsigned char  *data;       // Pointer to JPEG data
-    unsigned int    size;       // Size of JPEG data in bytes
+    unsigned char  *data;       // Pointer to frame data (JPEG or raw UYVY)
+    unsigned int    size;       // Size of frame data in bytes
     unsigned int    width;      // Frame width
     unsigned int    height;     // Frame height
     unsigned int    frame_num;  // Monotonic frame counter
+    unsigned int    format;     // WEBCAM_FMT_JPEG or WEBCAM_FMT_UYVY
 } webcam_frame_t;
 
 // Webcam status

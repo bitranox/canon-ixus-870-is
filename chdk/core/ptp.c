@@ -1019,7 +1019,8 @@ static int handle_ptp(
                     ptp.param1 = frame.size;
                     ptp.param2 = frame.width;
                     ptp.param3 = frame.height;
-                    ptp.param4 = frame.frame_num;
+                    // Encode format in high byte, frame_num in low 24 bits
+                    ptp.param4 = ((unsigned)frame.format << 24) | (frame.frame_num & 0x00FFFFFF);
                     if (!send_ptp_data_buffered(data, memcpy, (const char *)frame.data, frame.size)) {
                         ptp.code = PTP_RC_GeneralError;
                     }

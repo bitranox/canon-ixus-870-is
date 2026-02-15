@@ -35,6 +35,13 @@ public:
     // Returns true on success, output in rgb_out.
     bool process(const uint8_t* jpeg_data, int jpeg_size, RGBFrame& rgb_out);
 
+    // Convert raw UYVY (YUV422) data to RGB.
+    // uyvy_data: raw UYVY pixel data (2 bytes per pixel, U Y V Y pattern)
+    // data_size: size of uyvy_data in bytes (must be >= width * height * 2)
+    // width, height: frame dimensions
+    // Returns true on success, output in rgb_out.
+    bool process_uyvy(const uint8_t* uyvy_data, int data_size, int width, int height, RGBFrame& rgb_out);
+
     // Get last error
     std::string get_last_error() const;
 

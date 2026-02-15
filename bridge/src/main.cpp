@@ -232,9 +232,16 @@ int main(int argc, char* argv[]) {
         }
         last_frame_num = mjpeg.frame_num;
 
-        // Decode and upscale
+        // Decode frame (JPEG or raw UYVY)
         webcam::RGBFrame rgb;
-        if (!processor.process(mjpeg.data.data(), static_cast<int>(mjpeg.data.size()), rgb)) {
+        bool decode_ok;
+        if (mjpeg.format == ptp::FRAME_FMT_UYVY) {
+            decode_ok = processor.process_uyvy(mjpeg.data.data(), static_cast<int>(mjpeg.data.size()),
+                                               mjpeg.width, mjpeg.height, rgb);
+        } else {
+            decode_ok = processor.process(mjpeg.data.data(), static_cast<int>(mjpeg.data.size()), rgb);
+        }
+        if (!decode_ok) {
             if (opts.verbose) {
                 fprintf(stderr, "Decode error: %s\n", processor.get_last_error().c_str());
             }
@@ -250,6 +257,13 @@ int main(int argc, char* argv[]) {
         // Send to preview window
         if (preview.is_open()) {
             preview.show_frame(rgb.data.data(), rgb.width, rgb.height, rgb.stride);
+        }
+
+        // Log format on first frame
+        if (frames_received == 0) {
+            printf("First frame: %ux%u, %zu bytes, format=%s\n",
+                   mjpeg.width, mjpeg.height, mjpeg.data.size(),
+                   mjpeg.format == ptp::FRAME_FMT_UYVY ? "UYVY (raw)" : "JPEG");
         }
 
         frames_received++;
