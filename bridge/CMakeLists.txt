@@ -33,6 +33,14 @@ endif()
 find_path(TURBOJPEG_INCLUDE_DIR NAMES turbojpeg.h)
 find_library(TURBOJPEG_LIBRARY NAMES turbojpeg turbojpeg-static)
 
+# FFmpeg (for H.264 decoding)
+find_path(AVCODEC_INCLUDE_DIR NAMES libavcodec/avcodec.h)
+find_library(AVCODEC_LIBRARY NAMES avcodec)
+find_path(AVUTIL_INCLUDE_DIR NAMES libavutil/frame.h)
+find_library(AVUTIL_LIBRARY NAMES avutil)
+find_path(SWSCALE_INCLUDE_DIR NAMES libswscale/swscale.h)
+find_library(SWSCALE_LIBRARY NAMES swscale)
+
 # Sources
 set(PTP_SOURCES
     src/ptp/ptp_client.cpp
@@ -42,6 +50,8 @@ set(PTP_SOURCES
 set(WEBCAM_SOURCES
     src/webcam/frame_processor.cpp
     src/webcam/frame_processor.h
+    src/webcam/h264_decoder.cpp
+    src/webcam/h264_decoder.h
     src/webcam/preview_window.cpp
     src/webcam/preview_window.h
     src/webcam/virtual_webcam.cpp
@@ -69,6 +79,15 @@ if(TURBOJPEG_INCLUDE_DIR)
     target_include_directories(chdk-webcam PRIVATE ${TURBOJPEG_INCLUDE_DIR})
     target_compile_definitions(chdk-webcam PRIVATE HAS_TURBOJPEG)
 endif()
+if(AVCODEC_INCLUDE_DIR)
+    target_include_directories(chdk-webcam PRIVATE ${AVCODEC_INCLUDE_DIR})
+endif()
+if(AVUTIL_INCLUDE_DIR)
+    target_include_directories(chdk-webcam PRIVATE ${AVUTIL_INCLUDE_DIR})
+endif()
+if(SWSCALE_INCLUDE_DIR)
+    target_include_directories(chdk-webcam PRIVATE ${SWSCALE_INCLUDE_DIR})
+endif()
 
 target_link_libraries(chdk-webcam PRIVATE
     ${LIBUSB_LIBRARY}
@@ -79,6 +98,14 @@ if(TURBOJPEG_LIBRARY)
     target_link_libraries(chdk-webcam PRIVATE ${TURBOJPEG_LIBRARY})
 elseif(JPEG_FOUND)
     target_link_libraries(chdk-webcam PRIVATE ${JPEG_LIBRARIES})
+endif()
+
+if(AVCODEC_LIBRARY AND AVUTIL_LIBRARY AND SWSCALE_LIBRARY)
+    target_link_libraries(chdk-webcam PRIVATE ${AVCODEC_LIBRARY} ${AVUTIL_LIBRARY} ${SWSCALE_LIBRARY})
+    target_compile_definitions(chdk-webcam PRIVATE HAS_FFMPEG)
+    message(STATUS "FFmpeg found — H.264 decoding enabled")
+else()
+    message(WARNING "FFmpeg not found — H.264 decoding disabled")
 endif()
 
 # Windows-specific

@@ -553,6 +553,29 @@ bool PTPClient::start_webcam(int quality) {
                     isp_src == 4 ? "*** =4, EVF — JPCORE NOT routed! ***" :
                     "(unknown)");
         }
+        // Recording start diagnostics (Option D: UIFS_StartMovieRecord)
+        if (dummy.size() >= 288 && u32(256) == 0xD0D0D0D0) {
+            fprintf(stderr, "\n  --- RECORDING START (Option D) ---\n");
+            uint32_t rec_ret = u32(260);
+            fprintf(stderr, "  UIFS_StartMovieRecord   = 0x%08X  %s\n", rec_ret,
+                    rec_ret == 0 ? "(OK, event posted)" :
+                    rec_ret == 0xFFFFFFF9 ? "*** FAIL: state+8 == 0 ***" :
+                    rec_ret == 0xFFFFFFFD ? "*** FAIL: state+0x10 != 0 ***" :
+                    "(unknown error)");
+            fprintf(stderr, "  movie_status (final)    = %u  %s\n", u32(264),
+                    u32(264) == 4 ? "(=4, RECORDING!)" :
+                    u32(264) == 1 ? "(=1, STOPPED)" :
+                    u32(264) == 0 ? "(=0, NEVER STARTED)" : "");
+            fprintf(stderr, "  recording_active        = %u\n", u32(268));
+            fprintf(stderr, "  raw movie_status        = %u\n", u32(272));
+            fprintf(stderr, "  DAT_ff8834f0 precond:\n");
+            if (u32(280) != 0xDEADDEAD) {
+                fprintf(stderr, "    state+0x08 (!=0?)     = %u\n", u32(276));
+                fprintf(stderr, "    state+0x10 (==0?)     = %u\n", u32(280));
+            } else {
+                fprintf(stderr, "    DAT_ff8834f0 = 0x%08X  (invalid pointer!)\n", u32(276));
+            }
+        }
         fprintf(stderr, "=== END DMA CHAIN DIAGNOSTICS ===\n\n");
     }
 

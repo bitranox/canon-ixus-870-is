@@ -190,6 +190,7 @@
             kbd_get_autoclicked_key
             kbd_is_key_pressed
             kbd_key_press
+            kbd_key_release
             kbd_get_clicked_key
             get_jogdial_direction
             JogDial_CCW

@@ -61,8 +61,9 @@ constexpr uint16_t PTP_TYPE_RESPONSE = 3;
 // Frame format identifiers (matches WEBCAM_FMT_* in webcam.h)
 constexpr uint32_t FRAME_FMT_JPEG = 0;
 constexpr uint32_t FRAME_FMT_UYVY = 1;
+constexpr uint32_t FRAME_FMT_H264 = 2;
 
-// Frame received from camera (JPEG or raw UYVY)
+// Frame received from camera (JPEG, raw UYVY, or H.264)
 struct MJPEGFrame {
     std::vector<uint8_t> data;  // Frame data (JPEG or raw UYVY)
     uint32_t width;             // Frame width

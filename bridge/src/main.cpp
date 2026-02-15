@@ -21,6 +21,9 @@
 #include "webcam/frame_processor.h"
 #include "webcam/preview_window.h"
 #include "webcam/virtual_webcam.h"
+#ifdef HAS_FFMPEG
+#include "webcam/h264_decoder.h"
+#endif
 
 #include <cstdio>
 #include <cstdlib>
@@ -156,6 +159,19 @@ int main(int argc, char* argv[]) {
         processor.configure(pconf);
     }
 
+    // --- Initialize H.264 decoder ---
+#ifdef HAS_FFMPEG
+    webcam::H264Decoder h264dec;
+    {
+        if (!h264dec.init(opts.output_width, opts.output_height)) {
+            fprintf(stderr, "WARNING: H.264 decoder init failed: %s\n", h264dec.get_last_error().c_str());
+            fprintf(stderr, "H.264 frames will be skipped.\n");
+        } else {
+            printf("H.264 decoder ready (FFmpeg)\n");
+        }
+    }
+#endif
+
     // --- Initialize virtual webcam ---
     webcam::VirtualWebcam vwebcam;
     if (!opts.no_webcam) {
@@ -205,6 +221,12 @@ int main(int argc, char* argv[]) {
     uint32_t last_frame_num = 0;
 
     while (g_running) {
+        // Pump window messages first (must run every iteration, not just on successful frames)
+        if (preview.is_open() && !preview.pump_messages()) {
+            g_running = false;
+            break;
+        }
+
         auto frame_start = std::chrono::steady_clock::now();
 
         // Get frame from camera
@@ -220,8 +242,9 @@ int main(int argc, char* argv[]) {
                 frames_dropped = 0;
                 last_stats = now_check;
             }
-            // Brief sleep before retry
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            // Sleep before retry — not too fast or PTP polling starves
+            // the camera's recording task (DryOS cooperative scheduling)
+            std::this_thread::sleep_for(std::chrono::milliseconds(33));
             continue;
         }
 
@@ -232,10 +255,47 @@ int main(int argc, char* argv[]) {
         }
         last_frame_num = mjpeg.frame_num;
 
-        // Decode frame (JPEG or raw UYVY)
+        // Decode frame (JPEG, raw UYVY, or H.264)
         webcam::RGBFrame rgb;
         bool decode_ok;
-        if (mjpeg.format == ptp::FRAME_FMT_UYVY) {
+        if (mjpeg.format == ptp::FRAME_FMT_H264) {
+#ifdef HAS_FFMPEG
+            decode_ok = h264dec.decode(mjpeg.data.data(), mjpeg.data.size(), rgb);
+            if (!decode_ok) {
+                static int h264_skip = 0;
+                h264_skip++;
+                if (h264_skip <= 20 || h264_skip % 50 == 0) {
+                    fprintf(stderr, "H.264 FAIL #%d: %zu bytes, err=%s\n",
+                            h264_skip, mjpeg.data.size(), h264dec.get_last_error().c_str());
+                    // Dump first 32 bytes to diagnose AVCC format issues
+                    fprintf(stderr, "  hex:");
+                    for (size_t di = 0; di < 32 && di < mjpeg.data.size(); di++)
+                        fprintf(stderr, " %02x", mjpeg.data[di]);
+                    fprintf(stderr, "\n");
+                    // Show AVCC length interpretation
+                    if (mjpeg.data.size() >= 5) {
+                        uint32_t avcc_len = ((uint32_t)mjpeg.data[0] << 24) |
+                                            ((uint32_t)mjpeg.data[1] << 16) |
+                                            ((uint32_t)mjpeg.data[2] << 8) |
+                                            (uint32_t)mjpeg.data[3];
+                        uint8_t nal_hdr = mjpeg.data[4];
+                        fprintf(stderr, "  AVCC len=%u, NAL=0x%02x (type=%d, fzb=%d)\n",
+                                avcc_len, nal_hdr, nal_hdr & 0x1F, (nal_hdr >> 7) & 1);
+                    }
+                }
+                frames_dropped++;
+                continue;
+            }
+#else
+            static int h264_count = 0;
+            h264_count++;
+            if (h264_count <= 3 || h264_count % 100 == 0) {
+                fprintf(stderr, "H.264 frame (%zu bytes) — no FFmpeg, skipping.\n", mjpeg.data.size());
+            }
+            frames_dropped++;
+            continue;
+#endif
+        } else if (mjpeg.format == ptp::FRAME_FMT_UYVY) {
             decode_ok = processor.process_uyvy(mjpeg.data.data(), static_cast<int>(mjpeg.data.size()),
                                                mjpeg.width, mjpeg.height, rgb);
         } else {
@@ -261,9 +321,11 @@ int main(int argc, char* argv[]) {
 
         // Log format on first frame
         if (frames_received == 0) {
+            const char* fmt_name = "JPEG";
+            if (mjpeg.format == ptp::FRAME_FMT_UYVY) fmt_name = "UYVY (raw)";
+            else if (mjpeg.format == ptp::FRAME_FMT_H264) fmt_name = "H.264";
             printf("First frame: %ux%u, %zu bytes, format=%s\n",
-                   mjpeg.width, mjpeg.height, mjpeg.data.size(),
-                   mjpeg.format == ptp::FRAME_FMT_UYVY ? "UYVY (raw)" : "JPEG");
+                   mjpeg.width, mjpeg.height, mjpeg.data.size(), fmt_name);
         }
 
         frames_received++;
@@ -291,11 +353,6 @@ int main(int argc, char* argv[]) {
             last_stats = now;
         }
 
-        // Pump window messages (also detects window close)
-        if (preview.is_open() && !preview.pump_messages()) {
-            g_running = false;
-        }
-
         // Frame rate limiting
         auto frame_end = std::chrono::steady_clock::now();
         auto frame_time = frame_end - frame_start;
@@ -309,6 +366,9 @@ int main(int argc, char* argv[]) {
     preview.shutdown();
     client.stop_webcam();
     vwebcam.shutdown();
+#ifdef HAS_FFMPEG
+    h264dec.shutdown();
+#endif
     client.disconnect();
     printf("Done.\n");
 

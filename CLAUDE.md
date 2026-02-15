@@ -323,6 +323,10 @@ writing to it without mounting first will NOT write to the SD card!**
    ```
 6. **Ask the user to move the SD card** back to the camera and power cycle
 
+### Development Workflow
+
+**After each bridge test run, commit all modified files** with a descriptive message documenting the current approach and test results. This ensures we can always revert to a known working state when regressions happen. Include `movie_rec.c` (untracked, must be `git add`'d explicitly) in commits since it contains the spy buffer hooks.
+
 ## Firmware Reverse Engineering (Ghidra)
 
 ### Ghidra Project Setup
@@ -1076,6 +1080,48 @@ Added `tje_encode_uyvy()` to the TJE encoder to handle the UYVY (YUV422) format 
 - `chdk/modules/tje.h` — Added `tje_encode_uyvy()` declaration
 - `chdk/modules/webcam.c` — 640x480 rec_cb_arg2 path in `capture_and_compress_frame_sw()`, `disable_shutdown()`/`enable_shutdown()`
 - `chdk/modules/module_exportlist.c` — Exported `disable_shutdown` and `enable_shutdown` to modules
+
+#### H.264 Spy Buffer Approach — Option D (2026-02-11 to 2026-02-15)
+
+**Concept**: Instead of trying to activate JPCORE independently, use the camera's own movie recording pipeline. Start actual video recording via `UIFS_StartMovieRecord`, then intercept the H.264 encoded frames from `sub_FF85D98C_my` in `movie_rec.c` via a spy buffer at RAM `0x000FF000`.
+
+**Spy buffer protocol** (written by movie_rec.c, read by webcam module):
+
+| Offset | Field | Value |
+|--------|-------|-------|
+| spy[0] | magic | `0x52455753` ("SREW") after first frame |
+| spy[1] | jpeg_ptr | H.264 data pointer from sub_FF92FE8C |
+| spy[2] | jpeg_size | H.264 data size (ring buffer chunk, ~256 KB) |
+| spy[3] | frame_cnt | Incremented each successful frame (written LAST) |
+| spy[4] | init_flag | `0xCAFE0001` after init case runs |
+| spy[5] | err_code | Last sub_FF92FE8C error code |
+| spy[6] | err_cnt | Error count |
+| spy[7-10] | metadata | Frame metadata, task state, callback addr |
+
+**H.264 frame format**: Canon outputs AVCC format (4-byte big-endian NAL length prefix). NAL types: 1=P-frame (0x61), 5=IDR keyframe (0x65), 6=SEI. IDR interval ~8 frames. SPS/PPS are NOT in the spy buffer — they're only in the MOV container metadata. The PC bridge has hardcoded SPS/PPS extracted from a real MOV file.
+
+**What works**:
+- Recording starts (movie_status=4)
+- Spy buffer produces valid H.264 frames (~35-40 KB each, valid AVCC)
+- PC bridge receives and decodes them via FFmpeg (confirmed up to 22 consecutive frames in one session)
+- `capture_frame_h264()` reads spy buffer non-blocking (check once, return immediately)
+
+**Current problem (2026-02-15)**: The recording pipeline produces 2-8 H.264 frames, then stops. The `sub_FF85D98C_my` callback stops being called. After this, the camera stops responding to USB/PTP requests (bridge hangs on USB transfers). The root cause is unknown but suspected to be related to the AVI file write path in `sub_FF85D98C_my` — each frame involves `sub_FF8EDBE0` (AVI write) + semaphore wait (1s timeout). If this write fails or times out, the recording task state is reset.
+
+**Failed approaches to keep recording alive**:
+
+| Approach | Result |
+|----------|--------|
+| Skip AVI write entirely (`B loc_FF85DCBC` after spy write) | Camera shuts off — skipped critical register/state setup |
+| Zero JPEG size to skip AVI write naturally (`STR #0, [SP, #0x30]`) | Camera shuts off — same issue, critical state not maintained |
+| Spy wait loop (200ms msleep in capture_frame_h264) | Only 2 frames, then camera stops responding |
+| Increased bridge polling interval (33ms sleep) | 5 frames, still stops |
+
+**Files involved**:
+- `chdk/platform/ixus870_sd880/sub/101a/movie_rec.c` — spy buffer hooks in `sub_FF85D98C_my` (inline ASM)
+- `chdk/modules/webcam.c` — `capture_frame_h264()`, recording start/stop via `UIFS_StartMovieRecord`
+- `bridge/src/webcam/h264_decoder.cpp` — FFmpeg AVCC-to-Annex-B converter + decoder
+- `bridge/src/webcam/h264_decoder.h` — H.264 decoder header
 
 ### Future Ideas (Not Yet Implemented)
 

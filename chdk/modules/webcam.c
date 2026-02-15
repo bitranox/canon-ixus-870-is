@@ -30,6 +30,7 @@
 #include "webcam.h"
 #include "tje.h"
 #include "shutdown.h"
+#include "keyboard.h"
 
 // Maximum JPEG output buffer size (software fallback path).
 #define JPEG_BUF_SIZE       (256 * 1024)
@@ -67,6 +68,14 @@
 #define FW_GetMovieJpegVRAMVPixelsSize      ((void *)0xFF8C4184)
 #define FW_StopContinuousVRAMData           ((void *)0xFF8C425C)
 
+// Movie recording start/stop via CtrlSrv event system (Option D)
+// UIFS_StartMovieRecord_FW posts event 0x9A1 to the control server queue.
+// The actual pipeline initialization happens asynchronously in CtrlSrv task.
+// Takes 1 arg: callback pointer (NULL = use default).
+// Returns: 0=success, 0xFFFFFFF9=state check 1 fail, 0xFFFFFFFD=state check 2 fail.
+#define FW_UIFS_StartMovieRecord            ((void *)0xFF883D50)
+#define FW_UIFS_StopMovieRecord             ((void *)0xFF883D84)
+
 // JPCORE power/clock management (discovered via Ghidra RE of FUN_ff8eeb6c)
 // FUN_ff8eeb6c is a ref-counted power-on that calls three sub-functions
 // on first invocation:
@@ -81,6 +90,12 @@
 #define FW_JPCORE_ClockEnable               ((void *)0xFF815288)
 #define FW_JPCORE_ClockEnable2              ((void *)0xFF8152E8)
 #define FW_JPCORE_SubsystemInit             ((void *)0xFF8EF6B4)
+
+// JPCORE quality lookup table writer (Option B: quality fix)
+// FUN_ff849408(quality) sets piVar1[5] = quality + 1, which makes
+// JPCORE_DMA_Start proceed (it checks piVar1[5] != -1).
+// quality=0xe is what the firmware uses during actual video recording.
+#define FW_JPCORE_SetQuality                ((void *)0xFF849408)
 
 // JPCORE power struct at RAM 0x8028 (from ROM literal DAT_ff8eec70)
 // Offset 0x00: init flag (must be !=0 for FUN_ff8eeb6c to proceed)
@@ -111,8 +126,20 @@ static int current_fps = 0;
 
 // Raw UYVY streaming state
 static unsigned char *uyvy_buf = 0;        // Copy buffer for raw UYVY frames
-static unsigned int frame_format = 0;       // WEBCAM_FMT_JPEG or WEBCAM_FMT_UYVY
+static unsigned int frame_format = 0;       // WEBCAM_FMT_JPEG, WEBCAM_FMT_UYVY, or WEBCAM_FMT_H264
 static unsigned int last_cb_count_raw = 0;  // rec_cb_count at last raw capture (stale detection)
+
+// H.264 recording state (Option D: intercept encoded frames during recording)
+static int recording_active = 0;           // 1 if we started video recording for H.264 capture
+static int webcam_stop(void);              // forward declaration for use in webcam_start
+static unsigned int last_spy_cnt = 0;      // spy[3] frame count at last H.264 capture (stale detection)
+
+// Note: SPS/PPS for H.264 decoding is hardcoded in the PC bridge's FFmpeg
+// decoder (extracted from the camera's MOV avcC atom). The spy buffer never
+// contains SPS/PPS — Canon stores it only in the MOV container metadata.
+
+// JPCORE hardware JPEG state (Option B: quality fix)
+static unsigned int last_cb_count_hwjpeg = 0;  // rec_cb_count at last JPCORE check
 
 // Captured frame dimensions
 static unsigned int frame_width = 0;
@@ -368,6 +395,26 @@ static int hw_mjpeg_start(void)
     // EVFSetupInner when entering video mode.
     call_func_ptr(FW_StartMjpegMaking, 0, 0);
 
+    // ================================================================
+    // OPTION B: JPCORE QUALITY FIX
+    //
+    // The JPCORE hardware encoder requires a valid quality index at
+    // RAM 0x2568 (piVar1[5]). Without initialization, piVar1[5] = -1,
+    // causing JPCORE_DMA_Start to return early (JPEG never produced).
+    //
+    // FUN_ff849408(quality) is a trivial RAM write that sets:
+    //   piVar1[5] = quality + 1
+    // With quality = 0xe, piVar1[5] becomes 0xf (valid).
+    // This is the same value the firmware uses during video recording.
+    //
+    // After this fix, JPCORE_DMA_Start proceeds and the hardware encoder
+    // should write JPEG frames to the output buffer at *(0x2564).
+    // ================================================================
+    {
+        unsigned int quality_arg = 0xe;
+        call_func_ptr(FW_JPCORE_SetQuality, &quality_arg, 1);
+    }
+
     // CRITICAL: Force state[+0xD4] = 2 to switch FrameProcessing to video
     // recording path (FUN_ff9e508c) instead of EVF/LCD path (FUN_ff9e51d8).
     //
@@ -382,6 +429,20 @@ static int hw_mjpeg_start(void)
     {
         volatile unsigned int *s = HW_STATE_BASE;
         s[0xD4/4] = 2;  // Force video recording FrameProcessing path
+    }
+
+    // Write ISP routing register directly to route ISP output to JPCORE.
+    // FUN_ffa02ddc normally does this when called with mode=5 (video path),
+    // but state[+0xD4]=2 only controls the FrameProcessing dispatch — it
+    // doesn't immediately reconfigure the ISP. Writing the register directly
+    // should connect ISP → JPCORE without needing sub_FF8C3BFC.
+    //
+    // 0xC0F110C4: ISP source select register (write-only)
+    //   4 = EVF/LCD path
+    //   5 = video/JPCORE encoding path
+    {
+        volatile unsigned int *isp_src = (volatile unsigned int *)0xC0F110C4;
+        *isp_src = 5;
     }
 
     // NOTE: sub_FF8C3BFC(0xFF85D370, 0x1AB94, 0xFF85D28C) — recording
@@ -1099,7 +1160,213 @@ static int capture_frame_uyvy(void)
 }
 
 // ============================================================
-// Unified frame capture (raw UYVY > hardware JPEG > software JPEG)
+// JPCORE hardware JPEG capture (Option B: quality fix)
+// ============================================================
+
+// Capture a hardware-encoded JPEG frame from the JPCORE output buffer.
+// After the quality fix in hw_mjpeg_start(), JPCORE should write JPEG
+// frames to the buffer at piVar1[4] (*(0x2564)).
+//
+// Returns frame size on success, 0 if no JPEG available.
+static int capture_frame_hwjpeg(void)
+{
+    volatile unsigned int *jpcore = (volatile unsigned int *)0x00002554;
+    unsigned int jpout;
+    volatile unsigned char *p;
+    unsigned int cb_cnt;
+
+    if (!hw_mjpeg_active) return 0;
+
+    // Stale frame detection: wait for a new pipeline callback
+    cb_cnt = rec_cb_count;
+    if (cb_cnt == 0) return 0;
+    if (cb_cnt == last_cb_count_hwjpeg) return 0;
+
+    // Try multiple candidate addresses for JPCORE JPEG output:
+    //   1. piVar1[4] at *(0x2564) — JPCORE state struct output buf
+    //   2. HW DMA register 0xC0F04908 — actual DMA output destination
+    //   3. rec_cb_arg2 — pipeline callback arg2 (frame buffer)
+    {
+        unsigned int candidates[3];
+        int ci, found = 0;
+
+        candidates[0] = jpcore[4];                                    // piVar1[4]
+        candidates[1] = *(volatile unsigned int *)0xC0F04908;         // HW DMA out reg
+        candidates[2] = rec_cb_arg2;                                  // callback arg2
+
+        for (ci = 0; ci < 3 && !found; ci++) {
+            jpout = candidates[ci];
+            if (jpout < 0x00010000 || jpout >= 0x44000000) continue;
+
+            // Access via uncached mirror to see DMA-written data
+            if (jpout < 0x04000000) {
+                p = (volatile unsigned char *)(jpout | 0x40000000);
+            } else {
+                p = (volatile unsigned char *)jpout;
+            }
+
+            // Check for JPEG SOI marker (FF D8)
+            if (p[0] == 0xFF && p[1] == 0xD8) {
+                found = 1;
+            }
+        }
+
+        if (!found) return 0;
+    }
+
+    // Mark this callback count as consumed
+    last_cb_count_hwjpeg = cb_cnt;
+
+    // Scan for EOI to determine frame size
+    {
+        unsigned int frame_size = find_jpeg_eoi(p, HW_MJPEG_VRAM_BUFSIZE);
+        unsigned int fi;
+
+        if (frame_size == 0 || frame_size > JPEG_BUF_SIZE) return 0;
+
+        // Allocate copy buffer if needed
+        if (!jpeg_buf[0]) {
+            jpeg_buf[0] = malloc(JPEG_BUF_SIZE);
+            if (!jpeg_buf[0]) return 0;
+        }
+
+        // Copy JPEG data (source may be overwritten by next JPCORE encode)
+        for (fi = 0; fi < frame_size; fi++) {
+            jpeg_buf[0][fi] = p[fi];
+        }
+
+        hw_jpeg_data = jpeg_buf[0];
+        hw_jpeg_size = frame_size;
+        frame_width = 640;
+        frame_height = 480;
+        frame_format = WEBCAM_FMT_JPEG;
+
+        return (int)frame_size;
+    }
+}
+
+// ============================================================
+// H.264 frame capture from recording spy buffer (Option D)
+// ============================================================
+
+// Capture an H.264 encoded frame from the movie_rec.c spy buffer.
+// During active recording, movie_rec.c (sub_FF85D98C_my) calls
+// sub_FF92FE8C to get encoded frames and writes the pointer/size
+// to the spy buffer at RAM 0xFF000 with magic "SREW" (0x52455753).
+//
+// The data is H.264 NAL units (not JPEG despite the variable name
+// "jpeg_ptr" in movie_rec.c — the names are inherited from the
+// Digic III era when cameras used MJPEG, but the IXUS 870 IS
+// uses H.264 encoding in MOV container).
+//
+// Returns frame size on success, 0 if no frame available.
+// Non-blocking: checks spy buffer once and returns immediately.
+// The bridge retries after 33ms sleep on the PC side.
+static int capture_frame_h264(void)
+{
+    volatile unsigned int *spy = WEBCAM_SPY_ADDR;
+    unsigned int spy_magic, spy_ptr, spy_size, spy_cnt;
+
+    if (!recording_active) return 0;
+
+    spy_magic = spy[0];
+    spy_ptr = spy[1];
+    spy_size = spy[2];
+    spy_cnt = spy[3];
+
+    // Validate spy buffer
+    if (spy_magic != 0x52455753) return 0;  // "SREW" magic
+    if (spy_ptr == 0 || spy_size == 0) return 0;
+    if (spy_size > JPEG_BUF_SIZE) return 0;
+    if (spy_cnt == last_spy_cnt) return 0;  // Same frame as last time
+
+    last_spy_cnt = spy_cnt;
+
+    {
+        volatile unsigned char *p = (volatile unsigned char *)spy_ptr;
+        unsigned int fi;
+        unsigned int actual_size = spy_size;
+
+        // Determine actual frame size from AVCC length prefix.
+        // Canon's recording pipeline outputs H.264 in AVCC format
+        // (4-byte big-endian NAL length prefix, as used in MOV containers).
+        // spy[2] reports the ring buffer chunk size (~256 KB), not the
+        // actual encoded frame size (~30-100 KB).
+        //
+        // Parse AVCC NAL units: each is [4-byte length][NAL data].
+        // Canon Baseline profile produces ONE slice NAL per frame:
+        //   P-frame: [len][type 1 slice]
+        //   IDR:     [len][type 6 SEI] + [len][type 5 slice]  (sometimes)
+        //
+        // CRITICAL: Stop after the first VCL NAL (type 1 or 5). The ring
+        // buffer contains consecutive frames, and the next frame's AVCC
+        // header can look like a valid continuation, causing false chaining.
+        {
+            unsigned int pos = 0;
+            unsigned int total = 0;
+            int nal_count = 0;
+            int have_vcl = 0;  // found a VCL (slice) NAL — frame is complete
+
+            while (pos + 5 <= spy_size && nal_count < 4) {
+                unsigned int nal_len = ((unsigned int)p[pos] << 24) |
+                                      ((unsigned int)p[pos+1] << 16) |
+                                      ((unsigned int)p[pos+2] << 8) |
+                                      (unsigned int)p[pos+3];
+                unsigned int nal_type;
+
+                // Validate NAL length: must be reasonable (2 <= len <= 120KB)
+                if (nal_len < 2 || nal_len > 120000) break;
+
+                // Validate NAL header byte
+                nal_type = p[pos + 4] & 0x1F;
+                if (p[pos + 4] & 0x80) break;  // forbidden_zero_bit must be 0
+
+                // Only accept types from Canon's encoder:
+                // 1=non-IDR slice (P-frame), 5=IDR slice (keyframe), 6=SEI
+                if (nal_type != 1 && nal_type != 5 && nal_type != 6) break;
+
+                total = pos + 4 + nal_len;
+                pos = total;
+                nal_count++;
+
+                // Once we have a VCL NAL (slice), the frame is complete.
+                // Do NOT continue — the next bytes are a different frame.
+                if (nal_type == 1 || nal_type == 5) {
+                    have_vcl = 1;
+                    break;
+                }
+            }
+
+            if (have_vcl && total > 0 && total <= spy_size) {
+                actual_size = total;
+            }
+            // else: actual_size stays at spy_size (parser couldn't determine size)
+        }
+
+        // Allocate copy buffer if needed
+        if (!jpeg_buf[0]) {
+            jpeg_buf[0] = malloc(JPEG_BUF_SIZE);
+            if (!jpeg_buf[0]) return 0;
+        }
+
+        // Copy only the actual frame data (not the full ring buffer chunk)
+        if (actual_size > JPEG_BUF_SIZE)
+            actual_size = JPEG_BUF_SIZE;
+        for (fi = 0; fi < actual_size; fi++)
+            jpeg_buf[0][fi] = p[fi];
+
+        hw_jpeg_data = jpeg_buf[0];
+        hw_jpeg_size = actual_size;
+        frame_width = 640;
+        frame_height = 480;
+        frame_format = WEBCAM_FMT_H264;
+
+        return (int)spy_size;
+    }
+}
+
+// ============================================================
+// Unified frame capture (H.264 > HW JPEG > raw UYVY > SW JPEG)
 // ============================================================
 
 // Capture a frame using the best available method.
@@ -1108,29 +1375,35 @@ static int capture_frame(void)
 {
     int size;
 
-    // Fast path: raw UYVY from video pipeline (zero encoding overhead).
+    // Priority 1: H.264 from recording spy buffer (Option D).
+    // Smallest frames (~5-20 KB), highest potential FPS (30 fps).
+    // Only available when recording is active.
+    size = capture_frame_h264();
+    if (size > 0) goto got_frame;
+
+    // When recording is active, skip slow fallback paths (UYVY/SW JPEG)
+    // which would block the PTP task and starve the recording pipeline.
+    // Return 0 immediately — the bridge retries after 33ms.
+    if (recording_active) return 0;
+
+    // Priority 2: JPCORE hardware JPEG (Option B).
+    // Small frames (~30-100 KB), high FPS (10-30 fps).
+    // Available after quality fix, requires JPCORE producing data.
+    size = capture_frame_hwjpeg();
+    if (size > 0) goto got_frame;
+
+    // Priority 3: Raw UYVY from video pipeline (zero encoding overhead).
+    // Large frames (614 KB), ~5 FPS due to USB bandwidth.
     // Available once rec_callback_spy starts firing (~100ms after start).
     size = capture_frame_uyvy();
-    if (size > 0) {
-        frame_count++;
-        {
-            unsigned int now = get_tick_count();
-            if (last_frame_tick > 0 && now > last_frame_tick) {
-                int delta = now - last_frame_tick;
-                if (delta > 0) {
-                    int instant_fps = 1000 / delta;
-                    current_fps = (current_fps * 7 + instant_fps * 3) / 10;
-                }
-            }
-            last_frame_tick = now;
-        }
-        return size;
-    }
+    if (size > 0) goto got_frame;
 
-    // Fallback: software JPEG encoding (if raw path not yet available)
+    // Priority 4: Software JPEG encoding (slowest fallback).
+    // ~1.8 FPS, used only if all other paths fail.
     size = capture_and_compress_frame_sw();
     frame_format = WEBCAM_FMT_JPEG;
 
+got_frame:
     if (size > 0) {
         frame_count++;
         {
@@ -1188,8 +1461,11 @@ static int switch_to_video_mode(void)
 
 static int webcam_start(int jpeg_quality)
 {
+    // If still active from a previous bridge session (bridge crashed without
+    // calling stop), force a clean shutdown first. Without this, the stale
+    // recording_active/last_spy_cnt values prevent new frame detection.
     if (webcam_active) {
-        return 0; // Already active
+        webcam_stop();
     }
 
     if (jpeg_quality < 1) jpeg_quality = 1;
@@ -1215,25 +1491,107 @@ static int webcam_start(int jpeg_quality)
     frame_format = WEBCAM_FMT_JPEG;
     last_cb_count_raw = 0;
 
+    // Reset Option B/D state
+    last_cb_count_hwjpeg = 0;
+    recording_active = 0;
+    last_spy_cnt = 0;
+
     // Switch camera to video mode
     if (switch_to_video_mode() < 0) {
         webcam_active = 0;
         return -2; // Mode switch failed
     }
 
-    // Try to start the hardware MJPEG encoder.
-    // The video mode must be active before calling StartMjpegMaking, because
-    // it relies on the EVF pipeline being initialized.
-    // Allow the video pipeline to stabilize before attempting hardware init.
+    // Wait for video pipeline to stabilize before starting recording.
     msleep(500);
 
-    if (hw_mjpeg_start() == 0) {
-        // Hardware encoder started — no need to allocate software buffers.
-        // The hardware encoder provides its own JPEG buffer via
-        // GetContinuousMovieJpegVRAMData.
-    } else {
-        // Hardware encoder failed — fall back to software encoding.
-        // Allocate JPEG double-buffers for the software path.
+    // Skip hw_mjpeg_start() — calling StartMjpegMaking before recording
+    // conflicts with the recording pipeline's own JPCORE setup and causes
+    // the spy buffer to stop updating after 1-2 frames.
+
+    // Start video recording via the firmware's CtrlSrv event system to
+    // activate the full movie_record_task pipeline. This triggers
+    // sub_FF85D98C_my which calls sub_FF92FE8C to get encoded frames
+    // and writes them to the spy buffer at 0xFF000.
+    //
+    // UIFS_StartMovieRecord_FW posts event 0x9A1 to the control server
+    // queue. The actual pipeline init happens asynchronously.
+    {
+        {
+            int rec_retries;
+            unsigned int rec_args[1] = { 0 };  // NULL callback = use default
+            unsigned int rec_ret;
+
+            rec_ret = call_func_ptr(FW_UIFS_StartMovieRecord, rec_args, 1);
+
+            // Store return value in spy buffer for diagnostics
+            {
+                volatile unsigned int *spy = WEBCAM_SPY_ADDR;
+                spy[11] = rec_ret;           // UIFS_StartMovieRecord return
+                spy[12] = get_movie_status(); // movie_status right after call
+            }
+
+            if (rec_ret == 0) {
+                // Event posted successfully — wait for CtrlSrv to process
+                for (rec_retries = 0; rec_retries < 50; rec_retries++) {
+                    msleep(100);
+                    if (get_movie_status() == VIDEO_RECORD_IN_PROGRESS) {
+                        recording_active = 1;
+                        break;
+                    }
+                }
+
+                // Let first few frames settle before capturing
+                if (recording_active) {
+                    msleep(200);
+                }
+
+                // Store final movie_status for diagnostics
+                {
+                    volatile unsigned int *spy = WEBCAM_SPY_ADDR;
+                    spy[13] = get_movie_status();
+                    spy[14] = (unsigned int)rec_retries;
+                    spy[15] = 0;
+                }
+            }
+
+            // Append recording start results to hw_diag buffer
+            // (offsets 256-287 — after hw_mjpeg_start diagnostics)
+            {
+                #define DIAG_U32_REC(off, v) do { \
+                    hw_diag[(off)]   = (v);       hw_diag[(off)+1] = (v)>>8; \
+                    hw_diag[(off)+2] = (v)>>16;   hw_diag[(off)+3] = (v)>>24; \
+                } while(0)
+
+                DIAG_U32_REC(256, 0xD0D0D0D0);         // marker
+                DIAG_U32_REC(260, rec_ret);              // UIFS_StartMovieRecord return
+                DIAG_U32_REC(264, get_movie_status());   // movie_status after wait
+                DIAG_U32_REC(268, recording_active);     // did recording start?
+                DIAG_U32_REC(272, *(volatile unsigned int *)0x000051E4); // raw movie_status
+                {
+                    // Check precondition state at DAT_ff8834f0
+                    unsigned int dat_ptr = *(volatile unsigned int *)0xFF8834F0;
+                    if (dat_ptr >= 0x00001000 && dat_ptr < 0x04000000) {
+                        volatile unsigned int *ds = (volatile unsigned int *)dat_ptr;
+                        DIAG_U32_REC(276, ds[2]);  // +8: must be non-zero
+                        DIAG_U32_REC(280, ds[4]);  // +0x10: must be zero
+                    } else {
+                        DIAG_U32_REC(276, dat_ptr);
+                        DIAG_U32_REC(280, 0xDEADDEAD);
+                    }
+                }
+                DIAG_U32_REC(284, 0xD0D0D0D0);         // end marker
+
+                #undef DIAG_U32_REC
+            }
+
+            hw_diag_len = HW_DIAG_SIZE;
+        }
+    }
+
+    // Allocate JPEG double-buffers (needed for software fallback path
+    // when recording is not active or fails to start).
+    {
         int i;
         for (i = 0; i < NUM_JPEG_BUFS; i++) {
             if (!jpeg_buf[i]) {
@@ -1273,9 +1631,25 @@ static int webcam_stop(void)
     // Re-enable auto-power-off (disabled in webcam_start)
     enable_shutdown();
 
+    // Stop recording if we started it (Option D)
+    if (recording_active) {
+        int stop_retries;
+        call_func_ptr(FW_UIFS_StopMovieRecord, 0, 0);
+
+        for (stop_retries = 0; stop_retries < 50; stop_retries++) {
+            msleep(100);
+            if (get_movie_status() != VIDEO_RECORD_IN_PROGRESS) break;
+        }
+        recording_active = 0;
+    }
+
     // Stop hardware encoder if running
     hw_mjpeg_stop();
     hw_mjpeg_available = 0;
+
+    // Reset Option B/D state
+    last_cb_count_hwjpeg = 0;
+    last_spy_cnt = 0;
 
     // Free raw UYVY buffer
     if (uyvy_buf) {
@@ -1321,7 +1695,29 @@ static int webcam_get_frame(webcam_frame_t *frame)
         return -1;
     }
 
-    // Raw UYVY path (primary)
+    // H.264 path (Option D: from recording spy buffer)
+    if (frame_format == WEBCAM_FMT_H264 && hw_jpeg_data && hw_jpeg_size > 0) {
+        frame->data = hw_jpeg_data;
+        frame->size = hw_jpeg_size;
+        frame->width = frame_width;
+        frame->height = frame_height;
+        frame->frame_num = frame_count;
+        frame->format = WEBCAM_FMT_H264;
+        return 0;
+    }
+
+    // JPCORE hardware JPEG path (Option B) or spy buffer JPEG
+    if (frame_format == WEBCAM_FMT_JPEG && hw_jpeg_data && hw_jpeg_size > 0) {
+        frame->data = hw_jpeg_data;
+        frame->size = hw_jpeg_size;
+        frame->width = frame_width;
+        frame->height = frame_height;
+        frame->frame_num = frame_count;
+        frame->format = WEBCAM_FMT_JPEG;
+        return 0;
+    }
+
+    // Raw UYVY path
     if (frame_format == WEBCAM_FMT_UYVY && uyvy_buf) {
         frame->data = uyvy_buf;
         frame->size = UYVY_BUF_SIZE;

@@ -13,6 +13,7 @@
 // Frame format identifiers
 #define WEBCAM_FMT_JPEG  0      // JPEG compressed frame
 #define WEBCAM_FMT_UYVY  1      // Raw UYVY (YUV422) frame, 2 bytes per pixel
+#define WEBCAM_FMT_H264  2      // H.264 NAL unit(s) for one video frame
 
 // Frame info returned to callers
 typedef struct {
