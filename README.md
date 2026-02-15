@@ -249,8 +249,8 @@ Response: param1=0
 Extensive reverse engineering was performed on the IXUS 870 IS firmware (1.01a) using Ghidra. Key findings are documented in `firmware-analysis/` and include:
 
 - **Video pipeline architecture** — ISP → FrameProcessing → recording callbacks
-- **JPCORE hardware encoder** — state structures, power management, DMA configuration
-- **ISP routing registers** — source selection, resizer, JPCORE pipeline modes
+- **Hardware encoding architecture** — three JPCORE instances (JPEG, H.264, lossless), ISP routing, power management
+- **ISP routing registers** — source selection, resizer, pipeline modes
 - **Recording callback chain** — how `state[+0xD4]` controls EVF vs video path
 - **DMA buffer management** — triple ring buffer rotation in uncached RAM
 - **~40 firmware functions decompiled** — pipeline, callbacks, state machine, power
@@ -276,9 +276,17 @@ Extensive reverse engineering was performed on the IXUS 870 IS firmware (1.01a) 
 | `+0x144` | DMA double-buffer 0 address |
 | `+0x148` | DMA double-buffer 1 address |
 
-### Hardware Encoding Investigation
+### Hardware Encoding Architecture (Digic IV)
 
-The IXUS 870 IS uses **H.264 (MOV container)** for video recording, not MJPEG. The `StartMjpegMaking` firmware functions appear to be legacy from older Digic generations that used AVI/MJPEG. While JPCORE initializes and reports active, it never produces JPEG output on this camera. The raw UYVY approach bypasses encoding entirely — all compression is handled PC-side.
+The IXUS 870 IS uses a **single ISP-attached encoding pipeline** controlled through registers at `0xC0F0xxxx`–`0xC0F1xxxx`. Unlike Canon EOS DSLRs (which have separate JPCORE/JP62/JP57 hardware blocks at `0xC0E0xxxx`), the PowerShot compact uses mode parameters to switch the same hardware between JPEG (still images) and H.264 (video recording).
+
+The IXUS 870 IS records video as **H.264 in MOV container** (not MJPEG in AVI like its predecessor, the IXUS 860 IS on Digic III). Canon kept the legacy "MJPEG" function names (`StartMjpegMaking`, `GetContinuousMovieJpegVRAMData`) in the Digic IV firmware even though the underlying encoder changed to H.264.
+
+**Why hardware encoding cannot be used for webcam streaming:**
+
+- **JPEG encoder:** The JPCORE hardware works for still image capture but requires full recording pipeline initialization (`sub_FF8C3BFC` + frame dispatch callbacks) to deliver frames in video mode. Partial initialization results in the VRAM buffer never being written.
+- **H.264 encoder:** H.264 uses inter-frame prediction (P-frames reference I-frames), so individual frames cannot be decoded independently. The movie recording pipeline crashes when partially initialized.
+- **Result:** Raw UYVY streaming (capturing pre-encoding ISP output) is the optimal approach. All color conversion is handled PC-side with zero on-camera encoding overhead.
 
 ## Troubleshooting
 

@@ -353,9 +353,47 @@ Note: Python scripts do NOT work in Ghidra 12 headless mode (requires PyGhidra).
 | `0xC0000000`–`0xCFFFFFFF` | I/O registers | Hardware peripheral control |
 | `0xFF800000`–`0xFFFFFFFF` | Flash ROM | Firmware code + read-only data |
 
-### Hardware MJPEG Encoder — Reverse Engineering Results
+### Digic IV Hardware Encoding Architecture
 
-The Digic IV processor contains a dedicated JPEG encoding hardware block called **JPCORE**. Canon's firmware uses it for video recording (MOV files). The webcam module leverages this hardware encoder for near-zero-CPU JPEG frame encoding.
+**Important:** The three-block JPCORE/JP62/JP57 model documented by Magic Lantern for Canon EOS DSLRs does **NOT** apply to the IXUS 870 IS (PowerShot compact). A thorough firmware analysis found **zero references** to the `0xC0E0xxxx`, `0xC0E1xxxx`, or `0xC0E2xxxx` I/O register ranges anywhere in the firmware code or data.
+
+**IXUS 870 IS ISP architecture:**
+The IXUS 870 IS uses a **single ISP-attached encoding pipeline** controlled entirely through registers in the `0xC0F0xxxx`–`0xC0F1xxxx` range:
+
+| Register Range | Purpose |
+|----------------|---------|
+| `0xC0F04000`–`0xC0F04300` | DMA channel control (4 channels) |
+| `0xC0F05000`–`0xC0F0521C` | ISP routing (16 channels) |
+| `0xC0F0D000`–`0xC0F0D0A4` | ISP sensor/color configuration |
+| `0xC0F11008`–`0xC0F11150` | Pipeline mode/scaler control |
+| `0xC0F110C4` | **Pipeline mode selector** (4=EVF, 5=video recording) |
+| `0xC0F111C0`–`0xC0F111C8` | Pipeline resizer configuration |
+| `0xC0F11344`–`0xC0F113BC` | Video recording pipeline setup |
+| `0xC0F1A008`–`0xC0F1A014` | Pipeline scaler registers |
+
+The difference between still JPEG and video H.264 encoding is a **mode parameter** to the same hardware, not a different hardware destination:
+- **Mode 0 (Still JPEG)**: Uses `PipelineRouting(0, 0x01)`, JPCORE encodes via `FUN_ff8eb574_PipelineStep3` → `FUN_ff849448_JPCORE_DMA_Start`
+- **Mode 4 (EVF)**: Uses `PipelineRouting(0, 0x11)` via `PipelineConfig_FFA02DDC`
+- **Mode 5 (Video recording)**: Uses `PipelineRouting(0, 0x11)` with H.264 encoder (`H264EncPass.c`)
+
+Firmware strings confirm the encoding subsystem:
+- `JpCore.c`, `JpCoreIntrHandler`, `JpCore2IntrHandler` — two interrupt handlers suggest dual encoding capability
+- `EncodeJpegPass.c`, `EncodePictJpegPass.c` — still image JPEG paths
+- `H264EncPass.c`, `H264ThumbnailDecPass.c` — video H.264 paths
+
+**The IXUS 870 IS records video as H.264 in MOV container** (not MJPEG in AVI). The predecessor IXUS 860 IS (Digic III) used AVI/MJPEG — Canon kept the legacy "MJPEG" function names (`StartMjpegMaking`, `GetContinuousMovieJpegVRAMData`) in the Digic IV firmware even though the underlying encoder changed to H.264. These function names appear in 586+ CHDK platform files across generations.
+
+**Why `GetContinuousMovieJpegVRAMData` never produces JPEG output:**
+The function requires the full movie recording pipeline to be initialized via `sub_FF8C3BFC`, which sets up frame dispatch pointers (`state[+0x114]`, `state[+0x118]`, `state[+0x6C]`). The frame dispatch function (`FUN_ff8c335c`) checks `state[+0xF0]==1` AND `state[+0x48]==1` AND `state[+0x6C]!=NULL` before delivering encoded frames. Without the complete recording task initialization, no frames are delivered to the VRAM buffer. Additionally, the video path produces H.264 frames (not JPEG) which cannot be decoded independently due to inter-frame prediction.
+
+**Why H.264 frames cannot be used for webcam streaming:**
+H.264 uses inter-frame prediction (P-frames reference I-frames), so individual frames cannot be decoded independently. The movie recording pipeline (`task_MovieRecord`, `task_MovWrite`) crashes when partially initialized.
+
+**Result:** The raw UYVY approach (capturing pre-encoding ISP output at ~5 FPS) is the optimal solution for webcam streaming on this camera.
+
+### Hardware MJPEG Encoder — Reverse Engineering Results (Legacy Investigation)
+
+The firmware functions below were extensively investigated as potential hardware JPEG encoding paths. They are documented here for reference, but **do not produce JPEG output** on the IXUS 870 IS because the video pipeline routes to JP62 (H.264), not JPCORE (JPEG).
 
 #### Firmware Function Addresses (fw 1.01a)
 
