@@ -2,7 +2,8 @@
 
 ## Development Rules (MUST follow)
 
-- **After every bridge test**: ALWAYS ask the user for feedback on the current camera/bridge behavior before doing anything else. Do NOT assume what happened — the user can see the camera physically. Wait for their response, then document findings and commit with a meaningful message.
+- **After every bridge test**: ALWAYS ask the user for the result. Do NOT assume what happened — the user can see the camera physically. Wait for their response.
+- **Document and commit BEFORE any code changes**: After receiving test results from the user, FIRST update CLAUDE.md with the findings, THEN commit. Only AFTER the commit may you proceed with further code changes.
 - **Run bridge with `--no-preview --no-webcam`** during firmware development (no virtual webcam needed).
 - **Commit after each bridge test** with a message that describes what was tested and what the result was.
 
@@ -1118,18 +1119,13 @@ Added `tje_encode_uyvy()` to the TJE encoder to handle the UYVY (YUV422) format 
 - PC bridge receives and decodes them via FFmpeg (confirmed up to 22 consecutive frames in one session)
 - `capture_frame_h264()` reads spy buffer non-blocking (check once, return immediately)
 
-**Current problem (2026-02-15)**: The recording pipeline starts (movie_status=4) but stops after ~1 second. The `sub_FF85D98C_my` callback stops being called. After this, the camera stops responding to USB/PTP requests (bridge hangs on USB transfers).
+**Current working state (2026-02-15)**: Recording works with **completely stock movie_rec.c** (no spy buffer hooks, no AVI NOP patches, no skip-all-AVI branches). The only CHDK modifications in movie_rec.c are `unlock_optical_zoom` and `set_quality` — standard CHDK additions present in all camera ports.
 
-**Root cause**: The AVI file write path in `sub_FF85D98C_my` — each frame involves `sub_FF8EDBE0` (AVI write) + semaphore wait (TakeSemaphore at `[0x51A8+0x14]` with 1s timeout). If the write fails or times out, the recording task state is set to 1 (stopping).
+**Recording start method**: `UIFS_StartMovieRecord` (0xFF883D50) with fire-and-forget pattern — call and return PTP response immediately without waiting for movie_status or doing GiveSemaphore. Recording starts asynchronously. The camera records actual MOV files to the SD card.
 
-**Current fix — NOP AVI write + TakeSemaphore (2026-02-15)**: All 3 `sub_FF8EDBE0` (AVI write) calls in `sub_FF85D98C_my` are replaced with `MOV R0, R0` (NOP). All 3 `sub_FF8274B4` (TakeSemaphore with 1s timeout) calls are also NOPped. At each site, `SP+0x38` is forced to 0 (write result = success) so the pipeline's success path always runs. This differs from the earlier "force success" approach which still called the functions — the NOP approach eliminates both the blocking I/O and the blocking semaphore wait entirely. The pipeline keeps producing frames through `sub_FF92FE8C` (captured by spy buffer) without writing anything to the MOV file. Side benefit: SD card doesn't fill up with MOV files. **Status: NOT YET TESTED.**
+**Key discovery**: The recording pipeline dying after ~1 second was caused by the spy buffer patches in movie_rec.c, NOT by external factors. With stock movie_rec.c, recording stays alive normally. The previous NOP/skip-all-AVI approaches were unnecessary — they were trying to fix a problem created by the spy buffer patches themselves.
 
-The 3 patched sites in `sub_FF85D98C_my`:
-- **Site 1** (first-frame AVI write): followed by `sub_FF8EDC88` + `sub_FF8EDCC4` + state=5 (kept as-is)
-- **Site 2** (normal frame AVI write): unconditional branch to success path `loc_FF85DBB4`
-- **Site 3** (continuation frame AVI write): unconditional branch to success path `loc_FF85DC64`
-
-**GiveSemaphore keepalive (still active but no longer critical)**: webcam.c still pre-signals the AVI write semaphore 100 times on recording start. With the NOP patches, TakeSemaphore is never called, so this keepalive is no longer needed but harmless.
+**Previous failed approach — NOP AVI write + TakeSemaphore**: All 3 `sub_FF8EDBE0` (AVI write) calls and all 3 `sub_FF8274B4` (TakeSemaphore) calls were NOPped. Recording still died because the spy buffer hooks disrupted the pipeline flow. This approach has been abandoned in favor of stock movie_rec.c.
 
 **Failed approaches to keep recording alive**:
 
@@ -1146,15 +1142,19 @@ The 3 patched sites in `sub_FF85D98C_my`:
 | `PostLogicalEventToUI("PressMovieButton")` | Returns valid event ID 0x9A6 but is **ignored in PTP/USB mode** — movie_status stays 0 |
 | Skip AVI write entirely (`B loc_FF85DCBC` after spy write) | Camera shuts off — skipped critical register/state setup |
 | Zero JPEG size to skip AVI write naturally (`STR #0, [SP, #0x30]`) | Camera shuts off — same issue, critical state not maintained |
+| NOP AVI write + TakeSemaphore (3 sites) | Shows 23'06'' and stops immediately (AVI bookkeeping without preceding write) |
+| Skip ALL AVI code (`B loc_FF85DB10` after spy) | Shows 0'' and stops immediately (no frame counter progress) |
+| `kbd_key_press(KEY_SHOOT_FULL)` | Doesn't start recording in video mode via PTP |
+| **Stock movie_rec.c (no spy buffer)** | **WORKS — recording stays alive** |
 
 **Important operational notes**:
 - **`hw_mjpeg_start()` must NOT be called before recording**: It conflicts with the recording pipeline's own JPCORE setup and causes frames to stop after 1-2 seconds. The committed version correctly skips it.
-- **Semaphore handle validation**: The handle at `[0x51A8+0x14]` must be validated (not 0, not 0xFFFFFFFF, within RAM range) before calling GiveSemaphore, or the camera crashes.
-- **movie_rec.c NOP patches**: All 3 `BL sub_FF8EDBE0` and all 3 `BL sub_FF8274B4` are NOPped with `MOV R0, R0`. `SP+0x38` forced to 0. AVI bookkeeping functions (`sub_FF8EDC88`, `sub_FF8EDCC4`) still run to maintain pipeline state.
+- **movie_rec.c is STOCK**: All spy buffer hooks, AVI NOP patches, and skip-all-AVI branches have been removed. Only standard CHDK modifications remain (`unlock_optical_zoom`, `set_quality`). The recording pipeline runs completely unmodified.
+- **UIFS_StartMovieRecord fire-and-forget**: The PTP response is sent immediately after calling UIFS_StartMovieRecord. No waiting for movie_status, no GiveSemaphore. Recording starts asynchronously. This prevents the recording pipeline from interfering with USB.
 
 **Files involved**:
-- `chdk/platform/ixus870_sd880/sub/101a/movie_rec.c` — spy buffer hooks in `sub_FF85D98C_my` (inline ASM), AVI write success patches
-- `chdk/modules/webcam.c` — `capture_frame_h264()`, recording start/stop
+- `chdk/platform/ixus870_sd880/sub/101a/movie_rec.c` — **STOCK** CHDK code (no webcam patches)
+- `chdk/modules/webcam.c` — `capture_frame_h264()`, recording start/stop via UIFS_StartMovieRecord fire-and-forget
 - `bridge/src/webcam/h264_decoder.cpp` — FFmpeg AVCC-to-Annex-B converter + decoder
 - `bridge/src/webcam/h264_decoder.h` — H.264 decoder header
 

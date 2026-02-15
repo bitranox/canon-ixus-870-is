@@ -1,22 +1,5 @@
 #include "conf.h"
 
-// ====== WEBCAM SPY BUFFER at fixed RAM address 0x000FF000 ======
-// Shared between movie_rec.c (writer) and webcam module (reader).
-// Layout (16 words = 64 bytes):
-//   [0]  magic       0x52455753 ("SREW") after first frame write
-//   [1]  jpeg_ptr    JPEG data pointer from sub_FF92FE8C
-//   [2]  jpeg_size   JPEG data size from sub_FF92FE8C
-//   [3]  frame_cnt   incremented each successful frame
-//   [4]  init_flag   0xCAFE0001 after init case runs (sub_FF8C3BFC called)
-//   [5]  err_code    last sub_FF92FE8C error code (R8)
-//   [6]  err_cnt     error count
-//   [7]  metadata1   [SP+0x2C] from sub_FF92FE8C
-//   [8]  metadata2   [SP+0x28] from sub_FF92FE8C
-//   [9]  task_state  movtask[+0x3C] at frame time
-//   [10] task_0xA0   movtask[+0xA0] callback at frame time
-//   [11] reserved
-#define WEBCAM_SPY_ADDR  0x000FF000
-
 void change_video_tables(__attribute__ ((unused))int a, __attribute__ ((unused))int b) {}
 
 
@@ -25,7 +8,7 @@ void  set_quality(int *x){ // -17 highest; +12 lowest
 }
 
 
-void __attribute__((naked,noinline)) movie_record_task(){ 
+void __attribute__((naked,noinline)) movie_record_task(){
  // from 0xFF85E03C (found via call to taskcreate_AviWrite)
  asm volatile(
 
@@ -77,10 +60,6 @@ void __attribute__((naked,noinline)) movie_record_task(){
                  "LDR     R0, =0xFF85D370\n"
                  "STR     R6, [R4,#0x28]\n"
                  "BL      sub_FF8C3BFC\n"
-                 // WEBCAM SPY: mark init case happened
-                 "LDR     R0, =0x000FF000\n"
-                 "LDR     R1, =0xCAFE0001\n"
-                 "STR     R1, [R0, #16]\n"    // spy[4] = init_flag
                  "STR     R5, [R4,#0x3C]\n"
                  "B       loc_FF85E120\n"
  "loc_FF85E0D4:\n"
@@ -125,7 +104,7 @@ void __attribute__((naked,noinline)) movie_record_task(){
 }
 
 
-void __attribute__((naked,noinline)) sub_FF85D98C_my(){ 
+void __attribute__((naked,noinline)) sub_FF85D98C_my(){
  asm volatile(
 
                  "STMFD   SP!, {R4-R10,LR}\n"
@@ -166,36 +145,7 @@ void __attribute__((naked,noinline)) sub_FF85D98C_my(){
                  "ADD     R0, SP, #0x34\n"
                  "BL      sub_FF92FE8C\n"
                  "MOVS    R8, R0\n"
-                 "BNE     loc_FF85DA40_spy\n"
-                 // ====== WEBCAM SPY: sub_FF92FE8C success (R8=0) ======
-                 // SP+0x34 = JPEG ptr, SP+0x30 = size, SP+0x2C/0x28 = metadata
-                 "LDR     R1, =0x000FF000\n"
-                 "LDR     R0, =0x52455753\n"  // magic "SREW"
-                 "STR     R0, [R1]\n"         // spy[0] = magic
-                 "LDR     R0, [SP, #0x34]\n"
-                 "STR     R0, [R1, #4]\n"     // spy[1] = jpeg_ptr
-                 "LDR     R0, [SP, #0x30]\n"
-                 "STR     R0, [R1, #8]\n"     // spy[2] = jpeg_size
-                 "LDR     R0, [R1, #12]\n"
-                 "ADD     R0, R0, #1\n"
-                 "STR     R0, [R1, #12]\n"    // spy[3] = ++frame_cnt
-                 "LDR     R0, [SP, #0x2C]\n"
-                 "STR     R0, [R1, #28]\n"    // spy[7] = metadata1
-                 "LDR     R0, [SP, #0x28]\n"
-                 "STR     R0, [R1, #32]\n"    // spy[8] = metadata2
-                 "LDR     R0, [R6, #0x3C]\n"
-                 "STR     R0, [R1, #36]\n"    // spy[9] = task_state
-                 "LDR     R0, [R6, #0xA0]\n"
-                 "STR     R0, [R1, #40]\n"    // spy[10] = task_0xA0
-                 "B       loc_FF85DA24\n"
-                 // ====== WEBCAM SPY: sub_FF92FE8C error (R8!=0) ======
- "loc_FF85DA40_spy:\n"
-                 "LDR     R0, =0x000FF000\n"
-                 "STR     R8, [R0, #20]\n"    // spy[5] = err_code
-                 "LDR     R1, [R0, #24]\n"
-                 "ADD     R1, R1, #1\n"
-                 "STR     R1, [R0, #24]\n"    // spy[6] = ++err_cnt
-                 "B       loc_FF85DA40\n"     // continue to original error handler
+                 "BNE     loc_FF85DA40\n"
  "loc_FF85DA24:\n"
                  "LDR     R0, [R6,#0x2C]\n"
                  "CMP     R0, #1\n"
@@ -247,16 +197,15 @@ void __attribute__((naked,noinline)) sub_FF85D98C_my(){
                  "LDMIB   R4, {R0,R1}\n"
                  "LDR     R3, =0x1ABE0\n"
                  "MOV     R2, R10\n"
-                 // ====== WEBCAM PATCH: skip AVI write + semaphore (site 1) ======
-                 "MOV     R0, R0\n"             // NOP (was: BL sub_FF8EDBE0)
-                 "MOV     R0, #0\n"             // force result = 0
-                 "STR     R0, [SP,#0x38]\n"     // force write result = success
-                 "MOV     R0, R0\n"             // NOP (was: BL sub_FF8274B4 TakeSemaphore)
-                 "MOV     R0, R0\n"             // NOP (was: CMP R0, #9)
-                 "MOV     R0, R0\n"             // NOP (was: BEQ loc_FF85DBA4)
-                 "LDR     R0, [SP,#0x38]\n"     // = 0 (forced above)
-                 "CMP     R0, #0\n"             // always equal
-                 "BNE     loc_FF85DBC0\n"        // never taken
+                 "BL      sub_FF8EDBE0\n"
+                 "LDR     R0, [R6,#0x14]\n"
+                 "MOV     R1, #0x3E8\n"
+                 "BL      sub_FF8274B4\n"
+                 "CMP     R0, #9\n"
+                 "BEQ     loc_FF85DBA4\n"
+                 "LDR     R0, [SP,#0x38]\n"
+                 "CMP     R0, #0\n"
+                 "BNE     loc_FF85DBC0\n"
                  "MOV     R0, #1\n"
                  "BL      sub_FF8EDC88\n"
                  "BL      sub_FF8EDCC4\n"
@@ -296,13 +245,12 @@ void __attribute__((naked,noinline)) sub_FF85D98C_my(){
                  "LDMIB   R4, {R0,R1}\n"
                  "LDR     R3, [SP,#0x34]\n"
                  "MOV     R2, R8\n"
-                 // ====== WEBCAM PATCH: skip AVI write + semaphore (site 2) ======
-                 "MOV     R0, R0\n"             // NOP (was: BL sub_FF8EDBE0)
-                 "MOV     R0, #0\n"             // force result = 0
-                 "STR     R0, [SP,#0x38]\n"     // force write result = success
-                 "MOV     R0, R0\n"             // NOP (was: BL sub_FF8274B4 TakeSemaphore)
-                 "MOV     R0, R0\n"             // NOP (was: CMP R0, #9)
-                 "B       loc_FF85DBB4\n"        // always success (was: BNE)
+                 "BL      sub_FF8EDBE0\n"
+                 "LDR     R0, [R6,#0x14]\n"
+                 "MOV     R1, #0x3E8\n"
+                 "BL      sub_FF8274B4\n"
+                 "CMP     R0, #9\n"
+                 "BNE     loc_FF85DBB4\n"
  "loc_FF85DBA4:\n"
                  "BL      sub_FF930358\n"
                  "MOV     R0, #0x90000\n"
@@ -343,13 +291,12 @@ void __attribute__((naked,noinline)) sub_FF85D98C_my(){
                  "LDMIB   R4, {R0,R1}\n"
                  "MOV     R3, LR\n"
                  "MOV     R2, R8\n"
-                 // ====== WEBCAM PATCH: skip AVI write + semaphore (site 3) ======
-                 "MOV     R0, R0\n"             // NOP (was: BL sub_FF8EDBE0)
-                 "MOV     R0, #0\n"             // force result = 0
-                 "STR     R0, [SP,#0x38]\n"     // force write result = success
-                 "MOV     R0, R0\n"             // NOP (was: BL sub_FF8274B4 TakeSemaphore)
-                 "MOV     R0, R0\n"             // NOP (was: CMP R0, #9)
-                 "B       loc_FF85DC64\n"        // always success (was: BNE)
+                 "BL      sub_FF8EDBE0\n"
+                 "LDR     R0, [R6,#0x14]\n"
+                 "MOV     R1, #0x3E8\n"
+                 "BL      sub_FF8274B4\n"
+                 "CMP     R0, #9\n"
+                 "BNE     loc_FF85DC64\n"
                  "BL      sub_FF930358\n"
                  "MOV     R0, #0x90000\n"
                  "STR     R5, [R6,#0x3C]\n"
@@ -411,4 +358,3 @@ void __attribute__((naked,noinline)) sub_FF85D98C_my(){
                  "B       loc_FF85DB10\n"
  );
 }
-
