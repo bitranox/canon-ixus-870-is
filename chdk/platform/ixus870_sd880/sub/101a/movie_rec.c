@@ -16,11 +16,16 @@ void  set_quality(int *x){ // -17 highest; +12 lowest
 // Does NOT copy data — just stores the ring buffer pointer for the webcam module
 // to read directly via its own memcpy.
 //
+// Back-pressure protocol: only writes when hdr[4]==1 (consumer ready).
+// This prevents the first frame (IDR keyframe) from being overwritten by
+// subsequent P-frames during the startup wait before the consumer is active.
+//
 // Shared memory protocol at 0x000FF000 (initialized by webcam.c):
 //   [0] magic    = 0x52455753 when active (set by webcam.c)
 //   [1] src_ptr  = ring buffer pointer (written here, read by webcam.c)
 //   [2] size     = frame data size (written here)
-//   [3] count    = frame counter (written LAST, here)
+//   [3] count    = frame counter (written here)
+//   [4] ready    = 1 when consumer is ready for a new frame (set by webcam.c)
 //   [5] sem      = semaphore handle (set by webcam.c)
 static void __attribute__((used,noinline)) spy_ring_write(unsigned char *ptr, unsigned int size)
 {
@@ -28,10 +33,12 @@ static void __attribute__((used,noinline)) spy_ring_write(unsigned char *ptr, un
     unsigned int sem_handle;
 
     if (hdr[0] != 0x52455753) return;  // Not initialized by webcam.c
+    if (hdr[4] != 1) return;           // Consumer not ready — don't overwrite
 
     hdr[1] = (unsigned int)ptr;        // Source pointer (ring buffer address)
     hdr[2] = size;                     // Frame data size
-    hdr[3]++;                          // Frame counter (incremented LAST)
+    hdr[4] = 0;                        // Frame pending (consumer must set back to 1)
+    hdr[3]++;                          // Frame counter
 
     sem_handle = hdr[5];
     if (sem_handle != 0) {
@@ -153,8 +160,16 @@ void __attribute__((naked,noinline)) sub_FF85D98C_my(){
                  "LDR     R0, [R6,#0xA0]\n"
                  "MOV     R8, #0\n"
                  "BLX     R0\n"
+                 // After callback: also promote STATE 3→4 so the first
+                 // frame (IDR keyframe) is not skipped.  The callback at
+                 // +0xA0 promotes STATE 2→3 on the first msg 6, but the
+                 // original firmware only checks for STATE==4 here, causing
+                 // the IDR to be dropped every time.
                  "LDR     R0, [R6,#0x3C]\n"
+                 "CMP     R0, #3\n"
+                 "STREQ   R9, [R6,#0x3C]\n"  // STATE 3→4 (R9=4)
                  "CMP     R0, #4\n"
+                 "CMPNE   R0, #3\n"          // also accept 3 (just promoted)
                  "BNE     loc_FF85DB10\n"
                  "LDRH    R0, [R6,#2]\n"
                  "MOV     R5, #1\n"

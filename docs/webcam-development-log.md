@@ -395,7 +395,57 @@ Exhaustive analysis of 300+ frames across 4 bridge runs (20 seconds each):
 1. **Very long GOP**: IDR only at frame 0, then all P-frames for the entire recording. The first IDR may be consumed by the recording pipeline before our spy hook processes it.
 2. **Gradual intra-refresh**: No IDR frames at all. Intra-coded macroblocks are distributed across P-frames, refreshing the entire frame over ~8 frames (matching the observed ~8-second decoder sync time).
 
-**Camera side is correct** — the spy buffer captures all frames from the encoder. The decoder sync issue must be solved on the bridge side (e.g., FFmpeg error concealment, `AV_CODEC_FLAG2_SHOW_ALL`, or modifying the first frame's NAL type byte from 0x61→0x65 to force IDR treatment).
+### Slice Header Analysis & Root Cause (2026-02-16)
+
+Parsed Canon's SPS (`67 42 E0 1F DA 02 80 F6 9B 80 80 83 01`) to extract `log2_max_frame_num_minus4 = 0` → frame_num is 4 bits (0–15). Then decoded slice headers from all captured hex dumps:
+
+- **frame_num=0 NEVER appears** in any captured frame
+- First captured frame has frame_num=4 (frames 0–3 missed at startup)
+- Large frames (~43–50 KB) always have frame_num=1 (first P after IDR)
+- Regular cycle: fn=1,2,3,5,6,8,11,12,14,1,2,3... — frame_num=0 always absent
+
+This proves Canon's encoder **IS producing periodic IDR frames** (at frame_num=0, every ~16 frames), but they never reach `sub_FF92FE8C`.
+
+**Root cause: STATE machine in sub_FF85D98C_my skips the first frame of every IDR cycle.**
+
+The `sub_FF85D98C_my` handler (msg 6) has a two-stage STATE promotion:
+1. **Pre-callback check**: if STATE==3 → set STATE=4
+2. **Call callback at +0xA0** (registered by msg 2 recording start handler)
+3. **Post-callback check**: if STATE≠4 → EXIT (skip frame)
+
+The callback at +0xA0 promotes STATE 2→3 on its first invocation. This means:
+- **First msg 6** (IDR frame): STATE=2 → pre-check no-op → callback promotes 2→3 → post-check: STATE=3≠4 → **EXIT (IDR skipped!)**
+- **Second msg 6**: STATE=3 → pre-check promotes 3→4 → callback no-op → post-check: STATE=4 → **CONTINUE**
+
+The IDR is always the frame that triggers the 2→3 transition, and the firmware skips it because STATE hasn't reached 4 yet.
+
+### Two Fixes Applied (2026-02-16)
+
+**Fix 1: Back-pressure spy buffer protocol** — prevents first frame overwrite during startup.
+
+Previously, `spy_ring_write` was a single-element buffer that overwrote on every call. During the `webcam_start()` msleep(100) wait loop (up to 5 seconds), ~150 frames overwrote each other. The first frame was always lost.
+
+Changed `spy_ring_write` to check `hdr[4]` ("ready" flag): only write when the consumer has read the previous frame. Consumer sets `hdr[4]=1` after `memcpy`. Initialization sets `hdr[4]=1` for the first frame.
+
+Files changed:
+- `movie_rec.c` spy_ring_write: check `hdr[4]==1` before writing, set `hdr[4]=0` after
+- `webcam.c` webcam_start: set `hdr[4]=1` during init
+- `webcam.c` capture_frame_h264: set `hdr[4]=1` after reading
+
+**Fix 2: STATE 3→4 promotion after callback** — captures the IDR on first msg 6.
+
+Added 3 ARM instructions after the callback in `sub_FF85D98C_my` to also promote STATE 3→4 in the post-callback check:
+```asm
+"CMP     R0, #3\n"          // callback just promoted 2→3?
+"STREQ   R9, [R6,#0x3C]\n"  // yes → promote to 4 (R9=4)
+"CMP     R0, #4\n"
+"CMPNE   R0, #3\n"          // also accept STATE==3
+"BNE     loc_FF85DB10\n"
+```
+
+Now the first msg 6 (IDR frame): STATE=2 → callback promotes 2→3 → post-check promotes 3→4 → **CONTINUE (IDR captured!)**.
+
+**Status**: Built and deployed. Awaiting test.
 
 ## Future Ideas (Not Yet Implemented)
 
