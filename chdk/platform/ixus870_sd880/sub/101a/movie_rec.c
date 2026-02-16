@@ -47,7 +47,7 @@ static void __attribute__((used,noinline)) spy_ring_write(unsigned char *ptr, un
     }
 }
 
-static int idr_sent = 0;
+static int idr_sent = 0;   // msg 6 call counter (0=not yet, 1+=sent)
 static int msg5_done = 0;  // Set by spy_msg5_debug when msg 5 completes
 
 // Msg 5 debug capture — stores ring buffer values right after IDR encoding
@@ -132,8 +132,8 @@ static int __attribute__((used,noinline)) spy_idr_capture(void)
     unsigned int rb_base, idr_ptr_val, idr_size, data_at_ptr;
 
     if (hdr[0] != 0x52455753) { idr_sent = 0; return 0; }
-    if (idr_sent) return 0;
-    idr_sent = 1;
+    if (idr_sent >= 2) return 0;  // fire on first 2 msg 6 calls
+    idr_sent++;
 
     rb_base = *(volatile unsigned int *)0xFF93050C;
     idr_ptr_val = (rb_base) ? *(volatile unsigned int *)(rb_base + 0xD8) : 0;
@@ -142,13 +142,13 @@ static int __attribute__((used,noinline)) spy_idr_capture(void)
                   ? *(volatile unsigned int *)idr_ptr_val : 0xDEADDEAD;
 
     spy_debug_reset();
+    spy_debug_add('S','r','c','_', (idr_sent == 1) ? 0x4D362E31 : 0x4D362E32);  // "M6.1" or "M6.2"
     spy_debug_add('R','B','a','s', rb_base);
     spy_debug_add('I','d','r','P', idr_ptr_val);
     spy_debug_add('I','d','r','S', idr_size);
-    spy_debug_add('M','5','P','t', msg5_idr_ptr);
-    spy_debug_add('M','5','S','z', msg5_idr_size);
     spy_debug_add('D','a','t','P', data_at_ptr);
     spy_debug_add('M','5','C','t', msg5_count);
+    spy_debug_add('M','5','D','n', msg5_done);
     spy_debug_send();
 
     return 0;

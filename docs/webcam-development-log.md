@@ -712,6 +712,49 @@ After fixing get_frame(), debug frame still didn't appear. Added `hdr[8]` (write
 
 **Debug frame protocol confirmed working.** The SPSC queue, format dispatch, and bridge printer all function correctly.
 
+## v18 — Multi-point Debug Instrumentation (2026-02-16)
+
+Goal: Send debug frames from multiple hook points across the message timeline to find when and where IDR data appears in the ring buffer.
+
+### Crash investigation
+
+Adding a new BSS variable (`static int msg6_count`) to `movie_rec.c` caused immediate camera crashes on recording start — even when the variable was only incremented once. The crash persisted across battery pulls, ruling out accumulated state.
+
+**Root cause**: BSS layout changes. Adding any new `static` variable shifts the BSS section, which can cause memory conflicts with Canon firmware on this bare-metal platform.
+
+**Solution**: Repurpose existing `idr_sent` variable as a counter instead of a boolean flag. No new BSS variables, no layout changes. Changed from `if (idr_sent) return 0; idr_sent = 1;` to `if (idr_sent >= 2) return 0; idr_sent++;` to fire on the first 2 msg 6 calls.
+
+### Test 1: Two debug frames from msg 6 (M6.1 + M6.2)
+
+```
+=== DEBUG FRAME #0 (7 entries, 68 bytes) ===      ← first msg 6 (before msg 5)
+  Src_ = 0x4D362E31  ("M6.1")
+  RBas = 0x00008968  (35176)
+  IdrP = 0x00000000  (0)           ← IDR pointer NOT yet written
+  IdrS = 0x00000000  (0)           ← IDR size NOT yet written
+  DatP = 0xDEADDEAD               ← safe fallback (ptr was 0)
+  M5Ct = 0x00000000  (0)           ← msg 5 hasn't run
+  M5Dn = 0x00000000  (0)           ← msg 5 not done
+
+=== DEBUG FRAME #1 (7 entries, 68 bytes) ===      ← second msg 6 (later)
+  Src_ = 0x4D362E32  ("M6.2")
+  RBas = 0x00008968  (35176)
+  IdrP = 0x000158AC  (88236)       ← IDR pointer IS populated!
+  IdrS = 0x0000ACEC  (44268)       ← IDR size = 44,268 bytes
+  DatP = 0x00000000  (0)           ← first 4 bytes at IDR ptr are ZERO
+  M5Ct = 0x00000000  (0)           ← msg 5 counter still 0
+  M5Dn = 0x00000000  (0)           ← msg 5 still not done
+```
+
+**Key findings**:
+1. **+0xD8/+0xDC ARE populated by the second msg 6** — the ring buffer struct has IDR pointer and size filled in
+2. IDR pointer `0x000158AC` is in low firmware RAM, size 44,268 bytes is plausible for an H.264 IDR frame
+3. **DatP = 0x00000000** — the data at the IDR pointer starts with zeros, NOT a NAL start code (0x00000001 65). The pointer may be an offset rather than absolute address, or the data format isn't raw H.264
+4. **msg 5 never fired** between the two msg 6 calls — the IDR data was written by some other mechanism, not by the msg 5 handler
+5. Camera recorded normally for the full 20 seconds
+
+**Next steps**: Investigate whether `0x000158AC` is an offset into the ring buffer (base `0x00008968`), making the absolute address `0x00008968 + 0x000158AC = 0x0001E214`. Also try reading more bytes from the IDR pointer region to look for NAL signatures.
+
 ## Future Ideas (Not Yet Implemented)
 
 ### Raw YUV Pipeline Streaming (640x480)
