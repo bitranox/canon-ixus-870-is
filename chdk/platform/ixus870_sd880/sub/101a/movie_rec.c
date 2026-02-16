@@ -47,6 +47,37 @@ static void __attribute__((used,noinline)) spy_ring_write(unsigned char *ptr, un
     }
 }
 
+static int idr_sent = 0;
+
+static int __attribute__((used,noinline)) spy_idr_capture(void)
+{
+    volatile unsigned int *hdr = (volatile unsigned int *)0x000FF000;
+    unsigned int rb_base;
+    unsigned char *idr_ptr;
+    unsigned int idr_size;
+
+    // Only active when webcam is running
+    if (hdr[0] != 0x52455753) {
+        idr_sent = 0;  // Reset so next webcam session gets IDR
+        return 0;
+    }
+    if (idr_sent) return 0;  // Already sent IDR this session
+    idr_sent = 1;
+
+    // Read ring buffer struct base from ROM pointer
+    rb_base = *(volatile unsigned int *)0xFF93050C;
+    if (rb_base == 0) return 0;
+
+    // Read IDR NAL pointer (+0xD8) and size (+0xDC)
+    idr_ptr = (unsigned char *)(*(volatile unsigned int *)(rb_base + 0xD8));
+    idr_size = *(volatile unsigned int *)(rb_base + 0xDC);
+
+    if (!idr_ptr || idr_size == 0 || idr_size > 120000) return 0;
+
+    // Back up 4 bytes for AVCC length prefix, add 4 to size
+    spy_ring_write(idr_ptr - 4, idr_size + 4);
+    return 1;  // IDR sent — caller should skip the P-frame
+}
 
 
 void __attribute__((naked,noinline)) movie_record_task(){
@@ -196,12 +227,14 @@ void __attribute__((naked,noinline)) sub_FF85D98C_my(){
                  "MOVS    R8, R0\n"
                  "BNE     loc_FF85DA40\n"
 
-                // Spy ring write: copy frame data to webcam module's buffer
-                // and signal semaphore for synchronous delivery.
-                // spy_ring_write(ptr, size) preserves R4-R11 (AAPCS).
+                // One-shot IDR capture: on first frame, send IDR instead of P-frame
+                "BL      spy_idr_capture\n"    // Returns 1 if IDR was sent
+                "CMP     R0, #0\n"
+                "BNE     loc_FF85DA24\n"       // Skip P-frame if IDR was sent
+                // Normal P-frame delivery
                 "LDR     R0, [SP, #0x34]\n"    // R0 = jpeg_ptr from sub_FF92FE8C
                 "LDR     R1, [SP, #0x30]\n"    // R1 = jpeg_size
-                "BL      spy_ring_write\n"     // Copy data + signal semaphore
+                "BL      spy_ring_write\n"     // Send P-frame
 
  "loc_FF85DA24:\n"
                  "LDR     R0, [R6,#0x2C]\n"

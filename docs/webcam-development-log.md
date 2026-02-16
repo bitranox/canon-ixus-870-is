@@ -535,6 +535,44 @@ Removed the NAL type whitelist from `webcam.c` AVCC parser (previously rejected 
 2. **Inline assembly msg 5 hook**: Reimplement all 680 bytes of `sub_FF85D3BC` in asm, insert `BL spy_ring_write` after `FUN_ff93048c` — guaranteed correct but significant effort
 3. **Accept no IDR**: Rely on FFmpeg error concealment (~8s sync delay)
 
+## IDR Keyframe Capture — One-Shot Ring Buffer Read (2026-02-16)
+
+### Problem
+
+H.264 streams at 30 FPS but the FFmpeg decoder can't sync for ~8 seconds because the IDR keyframe (NAL type=5) never arrives via msg 6. Evidence from 300+ captured frames:
+- ALL frames are NAL type=1 (P-frame, header 0x61), zero type=5
+- `frame_num=0` never appears — cycle is fn=1,2,3,...,14,1,2,3,...
+- Canon's Digic IV H.264 encoder does NOT produce periodic IDRs during continuous recording
+
+### Root Cause
+
+The IDR is encoded and consumed entirely within msg 5 (`sub_FF85D3BC`). `FUN_ff93048c` reads the IDR pointer/size from the ring buffer struct at `*(0xFF93050C) + 0xD8/0xDC`. These fields are NOT cleared after msg 5 — the IDR pointer persists. The actual IDR data in ring buffer memory survives at least ~33ms (first msg 6) because the buffer is large (>1MB) and only 1-2 P-frames have been written since.
+
+### Implementation: `spy_idr_capture()`
+
+Added to `movie_rec.c` — a C function called from the msg 6 inline asm hook on every frame. On the **first successful** `sub_FF92FE8C` call in msg 6, reads the IDR pointer from the ring buffer struct and sends it via `spy_ring_write` **instead of** the P-frame. All subsequent msg 6 calls send P-frames normally.
+
+**New code in `sub_FF85D98C_my()` asm hook** (replaces direct spy_ring_write call):
+```asm
+BL      spy_idr_capture     // Returns 1 if IDR was sent
+CMP     R0, #0
+BNE     loc_FF85DA24        // Skip P-frame if IDR was sent
+LDR     R0, [SP, #0x34]    // Normal P-frame delivery
+LDR     R1, [SP, #0x30]
+BL      spy_ring_write
+```
+
+**Safety checks in `spy_idr_capture()`**:
+- Only active when webcam magic (0x52455753) is present
+- `idr_sent` flag ensures only one IDR per webcam session
+- Resets `idr_sent=0` when webcam is not running (for next session)
+- Validates rb_base ≠ 0, idr_ptr ≠ NULL, 0 < idr_size ≤ 120000
+- Falls through to normal P-frame delivery on any failure
+
+**Expected result**: First frame has NAL header 0x65 (IDR, type=5), decoder syncs immediately.
+
+**Status**: Deployed to SD card, awaiting bridge test.
+
 ## Future Ideas (Not Yet Implemented)
 
 ### Raw YUV Pipeline Streaming (640x480)
