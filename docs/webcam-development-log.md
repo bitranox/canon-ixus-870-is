@@ -469,9 +469,26 @@ The ring buffer management structure at `*(0xFF93050C)` stores the first frame (
 - `+0xD8` = pointer to NAL data (past the 4-byte AVCC length prefix)
 - `+0xDC` = NAL data size (without the length prefix)
 
-**Implementation**: Created `sub_FF85D3BC_my` — a C wrapper that calls the original msg 5 handler, then reads the IDR from the ring buffer structure and passes it to `spy_ring_write(ptr-4, size+4)` in AVCC format. Changed msg 5 dispatch in `movie_record_task` from `BL sub_FF85D3BC` to `BL sub_FF85D3BC_my`.
+**Implementation**: Created `sub_FF85D3BC_my` — a C wrapper that calls the original msg 5 handler via function pointer, then reads the IDR from the ring buffer structure and passes it to `spy_ring_write(ptr-4, size+4)` in AVCC format. Changed msg 5 dispatch in `movie_record_task` from `BL sub_FF85D3BC` to `BL sub_FF85D3BC_my`.
 
-**Status**: Built and deployed, awaiting test.
+**Test 1 — read ring buffer AFTER calling original handler:**
+- Still no IDR captured (all 150+ frames are NAL type=1, P-frames)
+- **Severe FPS regression**: only one burst of 19 FPS, then 0 FPS for rest of 20s (previously 30.4 FPS steady)
+- The original handler likely clears +0xD8/+0xDC after writing the MOV header
+
+**Test 2 — read ring buffer BEFORE calling original handler:**
+- Still no IDR captured (all 150+ frames are NAL type=1, P-frames)
+- FPS still degraded: intermittent 8–26 FPS bursts alternating with 0 FPS windows
+- The IDR encoding likely happens INSIDE msg 5 (via `FUN_ff8eddfc`), so the ring buffer doesn't have the IDR yet when we read it before the call
+
+**Root cause of failure**: The C wrapper approach (function pointer call to firmware ROM) causes a regression even when the IDR capture itself is a no-op (null checks prevent spy_ring_write from firing). The function pointer call `((void (*)(int))0xFF85D3BC)(msg)` may have ABI/stack issues when called from CHDK code loaded at a different memory region than the firmware ROM.
+
+**Reverted**: Removed `sub_FF85D3BC_my` and restored direct `BL sub_FF85D3BC` to fix the regression. The C wrapper approach to hooking msg 5 is not viable — need a different strategy.
+
+**Key insight**: The IDR is encoded and consumed entirely within `sub_FF85D3BC`. It's not available in the ring buffer before or after the call. To capture it, we need to either:
+1. Hook a function INSIDE sub_FF85D3BC (between encoding and MOV header writing)
+2. Reimplement sub_FF85D3BC in inline assembly (like sub_FF85D98C_my for msg 6)
+3. Accept that the first IDR is lost and focus on capturing periodic IDR frames that arrive later via msg 6
 
 ## Future Ideas (Not Yet Implemented)
 
