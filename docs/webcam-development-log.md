@@ -248,10 +248,94 @@ In the previous working spy buffer approach (v1 pointer-only), the bridge read d
 
 **dbg_parse_result = 0 anomaly**: The parser should set `0x10` (nal_len out of range) but the static always shows 0. Either the code returns before the parser (despite TakeSemaphore succeeding), or static variable writes in the parser are not persisting. The pre-parser statics (last_sem_ret, dbg_first8) DO work. This needs investigation.
 
-**Next steps**:
-1. Read more bytes (first 32-64 bytes) from the frame buffer to find where AVCC data starts
-2. Try reading from `ptr + offset` to skip potential ring buffer header
-3. Verify _memcpy cache coherency by reading back a few bytes with uncached mirror access
+### Third Test — 256-Byte Frame Dump (2026-02-16)
+
+Added a 256-byte dump of frame_data_buf into hw_diag Blocks 2-5 (bytes 128-383) to inspect the actual buffer contents after spy_ring_write's _memcpy.
+
+**Result**: frame_data_buf contains **initial malloc state**, not H.264 data:
+
+| Byte range | Content |
+|-----------|---------|
+| 0-127 | `00` (zeros) |
+| 128-151 | `00` (zeros) |
+| 152-255 | `FF` (0xFF fill) |
+
+This pattern (zeros then 0xFF) is characteristic of an uninitialized heap block — malloc returned a chunk that was never written to. spy_ring_write's `_memcpy(dst, ptr, copy_size)` appears to have **no effect** on the destination buffer.
+
+**Evidence summary across all three tests**:
+
+| Evidence | Value | Implication |
+|----------|-------|-------------|
+| hdr[3] frame_count | Incrementing at 30fps | spy_ring_write IS called |
+| hdr[2] frame_size | 65536 | copy_size = 64KB (non-zero) |
+| last_sem_ret | 0 | TakeSemaphore succeeds (GiveSemaphore fires) |
+| frame_data_buf content | zeros + 0xFF | _memcpy did NOT modify the buffer |
+| dbg_first8[0] | alternates 0/1 | First 4 bytes read as 0x00000000 or 0x00000001 |
+
+**Possible root causes**:
+
+1. **Cache coherency**: On ARM926EJ-S, a single CPU core shares L1 cache between all tasks, so cached writes from _memcpy should be visible to cached reads in capture_frame_h264. Cache coherency is only an issue with DMA engines. Unless Canon's _memcpy uses a DMA engine for large copies (64KB is large enough to justify DMA), this explanation is unlikely.
+
+2. **_memcpy argument order**: Canon's firmware _memcpy is declared as `_memcpy(dest, src, n)` matching standard memcpy. If the actual firmware function uses reversed arguments `_memcpy(src, dest, n)`, then spy_ring_write would copy FROM frame_data_buf TO the ring buffer (no visible effect on frame_data_buf). However, CHDK uses _memcpy throughout the codebase — reversed arguments would break many things.
+
+3. **Source pointer validity**: The ptr from sub_FF92FE8C might point to a ring buffer entry header rather than raw H.264 data. The alternating 0x00000000/0x00000001 in the first 4 bytes could be metadata (entry status field). But the 256-byte dump shows the DESTINATION is unchanged, not that the source is zeros — the zeros/0xFF pattern matches malloc initial state, not ring buffer content.
+
+4. **_memcpy silently fails**: The firmware's _memcpy might not handle certain memory regions or large sizes correctly in the movie_record_task context.
+
+### Four Options for H.264 Frame Interception
+
+The core problem: spy_ring_write's `_memcpy(dst, ptr, 64KB)` does not produce visible data in the destination buffer. Four approaches to solve this:
+
+#### Option 1: Uncached Destination Buffer
+
+Make spy_ring_write write through the ARM926 uncached RAM mirror so CPU cache is bypassed entirely.
+
+**Changes**:
+- webcam_start: `spy[1] = (unsigned int)frame_data_buf | 0x40000000;`
+- capture_frame_h264: read from `(unsigned char *)((unsigned int)frame_data_buf | 0x40000000)`
+
+**Pros**: Simplest change (2 lines). Keeps _memcpy in movie_rec.c context where ptr is freshly returned from sub_FF92FE8C.
+
+**Cons**: Uncached 64KB writes are ~4x slower than cached. May stall the recording pipeline's 33ms frame budget. Only helps if the root cause IS cache coherency (unlikely on single-core ARM926 unless _memcpy uses DMA internally).
+
+#### Option 2: Pointer Pass-Through (No Copy in movie_rec.c)
+
+spy_ring_write stores the ring buffer pointer and size in the spy header without copying. capture_frame_h264 does the copy itself using CHDK's memcpy.
+
+**Changes**:
+- spy_ring_write: remove _memcpy, just store `hdr[1] = (unsigned int)ptr; hdr[2] = size;`
+- capture_frame_h264: after TakeSemaphore, `memcpy(frame_data_buf, (void *)hdr[1], size)`
+
+**Pros**: Eliminates the _memcpy mystery entirely — uses CHDK's own memcpy in well-understood module context. Tests whether the issue is with _memcpy vs the data itself.
+
+**Cons**: Race condition — ptr points into Canon's ring buffer which could be overwritten when sub_FF92FE8C is called for the next frame. At 30fps the window is ~33ms; TakeSemaphore wakes immediately so the copy should complete well within that time, but it's not guaranteed. Also, if the root cause is that ptr points to metadata rather than H.264 data, this doesn't fix it.
+
+#### Option 3: Manual Byte Copy in spy_ring_write
+
+Replace `_memcpy` with a simple for loop in spy_ring_write to rule out firmware _memcpy quirks.
+
+**Changes**:
+- spy_ring_write: replace `_memcpy(dst, ptr, copy_size)` with `for (i = 0; i < copy_size; i++) dst[i] = ptr[i];`
+
+**Pros**: Definitive test of whether _memcpy itself is the problem. Byte-by-byte copy through ARM load/store is guaranteed to go through the CPU cache. If this produces valid data, the issue was _memcpy; if not, the issue is with the source data or pointer.
+
+**Cons**: Byte-by-byte copy of 64KB is very slow (~2-5ms on ARM926 vs ~0.3ms for optimized _memcpy). Could stall the recording pipeline. But acceptable as a diagnostic — can optimize later.
+
+#### Option 4: Direct Ring Buffer Read
+
+Read directly from Canon's H.264 ring buffer (managed by `DAT_ff93050c` at 0xFF93050C) in the webcam module, bypassing spy_ring_write and movie_rec.c entirely.
+
+**Changes**:
+- webcam.c: after starting recording, poll the ring buffer structure for new frames
+- movie_rec.c: remove spy_ring_write hook entirely
+
+**Pros**: Cleanest architecture — no ASM hooks in movie_rec.c, no shared memory protocol. Reading from a well-defined Canon data structure that the firmware manages correctly.
+
+**Cons**: Most complex to implement. Requires reverse-engineering the ring buffer format (entry layout, read/write pointers, frame data offsets). Concurrent reads from two tasks (movie_record_task and webcam module) may corrupt ring buffer state. sub_FF92FE8C likely advances a read pointer — if we read without advancing, we get stale data; if we advance, we starve the AVI writer.
+
+#### Recommendation
+
+**Option 2 (pointer pass-through)** offers the best balance: simple change, eliminates the _memcpy mystery, and the race condition is manageable. If it works, we know the issue was _memcpy in the firmware context. If it doesn't work (data at ptr is also zeros), we know the source pointer itself is the problem, narrowing the investigation to sub_FF92FE8C's output.
 
 ## Future Ideas (Not Yet Implemented)
 

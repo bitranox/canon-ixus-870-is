@@ -1350,7 +1350,7 @@ static int capture_frame_h264(void)
     // Frame data is already in frame_data_buf (copied by spy_ring_write).
     size = hdr[2];  // Actual bytes copied
 
-    // Capture first 8 bytes for diagnostics regardless of parser outcome
+    // Capture first 8 bytes for Block 1 diagnostics
     if (frame_data_buf && size >= 8) {
         dbg_first8[0] = ((unsigned int)frame_data_buf[0] << 24) |
                         ((unsigned int)frame_data_buf[1] << 16) |
@@ -1360,6 +1360,20 @@ static int capture_frame_h264(void)
                         ((unsigned int)frame_data_buf[5] << 16) |
                         ((unsigned int)frame_data_buf[6] << 8) |
                         (unsigned int)frame_data_buf[7];
+    }
+
+    // Dump first 256 bytes of frame data into Blocks 2-5 (bytes 128-383)
+    // so we can visually inspect the ring buffer chunk format.
+    {
+        int dump_len = (size < 256) ? (int)size : 256;
+        int di;
+        if (frame_data_buf && dump_len > 0) {
+            for (di = 0; di < dump_len; di++)
+                hw_diag[128 + di] = frame_data_buf[di];
+        }
+        // Zero-fill remainder
+        for (di = dump_len; di < 256; di++)
+            hw_diag[128 + di] = 0;
     }
 
     if (size == 0 || size > SPY_BUF_SIZE) return 0;
