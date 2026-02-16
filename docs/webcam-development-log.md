@@ -366,9 +366,36 @@ Camera started recording (user confirmed). Bridge received 250+ H.264 frames wit
 **Race condition assessment**: No data corruption observed in 250+ frames. The memcpy in capture_frame_h264 completes well within the 33ms frame period. The ring buffer pointer from sub_FF92FE8C remains valid until the next frame is processed by movie_record_task.
 
 **Remaining issues**:
-1. **Initial decoder sync delay**: ~50 frames lost waiting for first IDR. Could be improved by detecting IDR frames and only starting PTP delivery when one arrives.
+1. **Initial decoder sync delay**: ~50 frames lost before decoder syncs. See IDR investigation below.
 2. **Stats show 0 FPS for first 8 seconds**: Bridge drops frames while decoder accumulates enough data to sync. Once synced, immediately jumps to 30.5 FPS.
 3. **SD card device changed**: After SDHCI driver reload, SD card now appears as `/dev/mmcblk1p1` instead of `/dev/mmcblk0p1`. Added `NOT_MOUNTED.txt` marker files to `/mnt/sdcard` and `/mnt/mmc` to prevent accidental writes to unmounted paths.
+
+### IDR Frame Investigation (2026-02-16)
+
+Investigated why the FFmpeg decoder takes ~8 seconds to sync. Attempted to add a `got_idr` filter in `capture_frame_h264()` to skip P-frames until the first IDR keyframe. The filter was built, deployed, and tested — result: **zero frames delivered** because no IDR ever arrives.
+
+**Finding: Canon's H.264 encoder produces NO IDR (type=5) frames in the spy buffer.**
+
+Exhaustive analysis of 300+ frames across 4 bridge runs (20 seconds each):
+- Every single frame is NAL type=1 (P-frame, header byte 0x61)
+- Zero NAL type=5 (IDR, header byte 0x65) observed
+- Larger frames (~43 KB vs ~37 KB average) are still type=1, not IDR
+
+**Ghidra decompilation of movie_record_task message handlers** confirmed:
+- **msg 6** → `sub_FF85D98C_my` → `sub_FF92FE8C` (MovieFrameGetter) — the ONLY path that reads frame data from the ring buffer. Our spy hook correctly intercepts ALL frames from this path.
+- **msg 8** → `sub_FF92FDF0` — ring buffer housekeeping function (increments counter at `+0x30`, accumulates size at `+0x6C`). Does NOT return frame data. Not a separate IDR handler.
+- **msg 2** → recording start, ring buffer init, encoder config
+- **msg 5** → pipeline start, file header write
+- **msg 4** → recording stop
+- **msg 11** → initialization
+
+**Correction**: Previous dev log entry stated "movtask[+0x6C] shows 0x00000065 (NAL header for IDR/type=5)". This was a misinterpretation. Ghidra decompilation of `sub_FF92FDF0` shows `+0x6C` is an accumulator (`+= param_2`), not a NAL type field. The value 0x65 was a coincidental running sum.
+
+**Canon's encoding approach** (one of two possibilities):
+1. **Very long GOP**: IDR only at frame 0, then all P-frames for the entire recording. The first IDR may be consumed by the recording pipeline before our spy hook processes it.
+2. **Gradual intra-refresh**: No IDR frames at all. Intra-coded macroblocks are distributed across P-frames, refreshing the entire frame over ~8 frames (matching the observed ~8-second decoder sync time).
+
+**Camera side is correct** — the spy buffer captures all frames from the encoder. The decoder sync issue must be solved on the bridge side (e.g., FFmpeg error concealment, `AV_CODEC_FLAG2_SHOW_ALL`, or modifying the first frame's NAL type byte from 0x61→0x65 to force IDR treatment).
 
 ## Future Ideas (Not Yet Implemented)
 
