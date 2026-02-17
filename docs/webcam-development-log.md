@@ -901,6 +901,81 @@ msg 11 (init) → msg 2 (start pipeline) → msg 5 (first IDR + MOV header)
 - `FUN_ff930b20` (0xFF930B20, 344 bytes): MOV container header writer — creates file atoms, writes SPS/PPS + IDR data to SD card.
 - `FUN_ff93048c` (0xFF93048C, 24 bytes): Returns `+0xD8`/`+0xDC` from ring buffer struct — these are MOV file offsets, NOT RAM pointers.
 
+## v19 — Deep Firmware Investigation: IDR Architecture (2026-02-18)
+
+### Comprehensive Ghidra Decompilation
+
+Decompiled 74 functions (6 failed) covering the full IDR encoding, pipeline, ring buffer, and message architecture using `DecompileIDRArchitecture.java`. Output: `firmware-analysis/idr_architecture_decompiled.txt` (3900+ lines).
+
+### Corrected Message Architecture
+
+Previous understanding of msg 4 was wrong. Corrected roles:
+
+| Message | Handler | Role (CORRECTED) |
+|---------|---------|-------------------|
+| msg 2 | sub_FF85DE1C | Start recording: DMA alloc, JPCORE pipeline, ring buffer, STATE=2 |
+| msg 3 | (inline) | Sets `+0x2C = 1` (stop request flag) — does NOT stop recording |
+| msg 4 | sub_FF85D6CC | **Recording STOP** (not periodic IDR): stops pipeline, writes MOV trailer, posts msg 5 |
+| msg 5 | sub_FF85D3BC | First IDR + MOV header: `FUN_ff8eddfc` encodes IDR, `FUN_ff930b20` writes MOV |
+| msg 6 | sub_FF85D98C | Per-frame: `sub_FF92FE8C` reads P-frame from ring buffer, `sub_FF8EDBE0` writes to MOV |
+| msg 8 | sub_FF92FDF0 | Ring buffer notification from JPCORE hardware |
+
+### Two Separate H.264 Encoding Paths
+
+The firmware uses two distinct JPCORE hardware channels that cannot run simultaneously:
+
+1. **Pipeline path** (P-frames): `StartMjpegMaking` configures JPCORE for continuous encoding. Output goes to ring buffer → read by msg 6 → written to MOV via `sub_FF8EDBE0`. This is what our spy hook intercepts.
+
+2. **IDR encoder path**: `FUN_ff8eddfc` (first IDR, called by msg 5) and `FUN_ff8ee610` (periodic IDR, called by msg 4) encode standalone IDR frames to `DMA+0x100040`. Output is written directly to the MOV file header/trailer by `FUN_ff930b20`. **Never enters the ring buffer.**
+
+### IDR vs P-Frame Decision Point
+
+Found in `sub_FF8EDBE0_EncodeFrame`:
+- `param_13 == -1` (0xFFFFFFFF) → IDR frame → calls `FUN_ff8eda90(1)` → JPCORE channels 3+0x11
+- `param_13 == -2` → special frame → calls `FUN_ff8eda90(0)`
+- `param_13 >= 0` → P-frame → calls function at `iVar1 + 0x6c`
+
+The first call from msg 5 (msg 6 path, frame 0) uses `param_13 = -1` (IDR). All subsequent msg 6 calls use `param_13 >= 0` (P-frame). This confirms IDR encoding is architecturally separate from the ring buffer pipeline.
+
+### IDR Interval Controller
+
+`FUN_ff92e3b0` (called with `frame_count, 0xF`) manages a 15-frame GOP cycle. However, during webcam sessions, msg 4 (which would trigger periodic IDR re-encoding) never fires because the stop-request flag `+0x2C` is never set by the webcam module.
+
+### FUN_ff8f2558 Is NOT a Frame Type Selector
+
+Previously speculated to control IDR vs P-frame encoding mode. Decompilation proves it's a **hardware clock/power enable bitmask**:
+- `0x81` = power on both IDR encoder block and thumbnail block
+- `0x80` = IDR encoder block only
+- `0x01` = pipeline/thumbnail block only
+
+### Current Hook Location
+
+The spy hook in `sub_FF85D98C_my` intercepts frames **after** `sub_FF92FE8C` (MovieFrameGetter) returns them from the ring buffer but **before** `sub_FF8EDBE0` (EncodeFrame) processes them for MOV writing. This is the correct location for P-frame interception but IDR frames never pass through this path.
+
+### Six Approaches Evaluated
+
+| # | Approach | Risk | Feasibility |
+|---|----------|------|-------------|
+| 1 | Post msg 4 to movie_record_task queue | HIGH | Triggers file I/O (MOV trailer write) — would fail or corrupt |
+| 2 | Call FUN_ff8ee610 directly from webcam module | MEDIUM-HIGH | Requires pipeline stop, JPCORE reconfig, correct DMA setup |
+| 3 | Flip JPCORE hardware register for IDR | HIGH | Not how it works — IDR uses different channels (3+0x11) |
+| 4 | **Extract SPS/PPS from real MOV, synthetic IDR on bridge** | **SAFEST** | Parse MOV `avcC` atom, construct SPS+PPS+IDR NAL prefix |
+| 5 | Trigger brief recording at startup for real IDR | MEDIUM | Timing-sensitive, may conflict with webcam pipeline |
+| 6 | FFmpeg error concealment (accept P-frame-only stream) | NONE | Already works (~8s sync delay), but quality degrades |
+
+### Recommended Path Forward
+
+**Option 4 (synthetic IDR from MOV SPS/PPS)** is the safest approach:
+1. Record a short clip on the camera (any resolution/quality)
+2. Extract the `avcC` atom from the MOV file — contains SPS and PPS parameter sets
+3. On the bridge side, construct a synthetic IDR preamble: `[00 00 00 01] + SPS + [00 00 00 01] + PPS + [00 00 00 01 65 ...]`
+4. Feed this to FFmpeg before the first P-frame arrives
+5. The decoder initializes immediately with correct parameters, eliminating the 8-second sync delay
+
+The SPS/PPS are static for a given resolution/quality setting. Once extracted, they can be hardcoded in the bridge for the 640x480@30fps webcam mode.
+
+**Alternative**: Option 6 (accept current behavior) already works — FFmpeg syncs via error concealment after ~8 seconds. If the 8-second delay is acceptable, no firmware changes are needed.
+
 ## Future Ideas (Not Yet Implemented)
 
 ### Raw YUV Pipeline Streaming (640x480)
