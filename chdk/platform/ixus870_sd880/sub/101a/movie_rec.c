@@ -137,11 +137,12 @@ static int __attribute__((used,noinline)) spy_idr_capture(void)
 
     spy_debug_reset();
     spy_debug_add('F','r','m','#', idr_sent);
-    // ROM pointers — safe reads from firmware ROM
-    spy_debug_add('R','M','a','4', *(volatile unsigned int *)0xFF85D6A4);  // DAT_ff85d6a4: addr of context base
-    spy_debug_add('R','M','c','8', *(volatile unsigned int *)0xFF930C78);  // DAT_ff930c78: addr of data area ptr
-    spy_debug_add('R','M','0','c', *(volatile unsigned int *)0xFF93050C);  // DAT_ff93050c: addr of rb struct (verify: should point to 0x8968)
+    // RAM values from ROM pointer chain (step 2)
+    spy_debug_add('C','t','x','B', *(volatile unsigned int *)0x5260);      // *DAT_ff85d6a4: context base
+    spy_debug_add('D','a','t','A', *(volatile unsigned int *)0x8DE4);      // *DAT_ff930c78: data area base
     // Ring buffer struct fields for reference
+    spy_debug_add('R','B','c','4', *(volatile unsigned int *)0x8A2C);      // +0xC4
+    spy_debug_add('R','B','c','0', *(volatile unsigned int *)0x8A28);      // +0xC0
     spy_debug_add('I','d','r','O', *(volatile unsigned int *)0x8A40);      // +0xD8: IDR offset
     spy_debug_add('I','d','r','S', *(volatile unsigned int *)0x8A44);      // +0xDC: IDR size
     spy_debug_add('R','B','d','0', *(volatile unsigned int *)0x8A38);      // +0xD0: DMA base

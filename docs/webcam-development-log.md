@@ -1359,11 +1359,43 @@ Complexity: Requires understanding H.264 slice header bitstream encoding (exp-Go
 
 ### v23c — ROM pointer probe (starting option 1)
 
-Read ROM constants to trace the DMA context pointer chain:
-- `*(0xFF85D6A4)` — RAM address of movie record context base pointer
-- `*(0xFF930C78)` — RAM address of data area base (set by FUN_ff930b04)
+**Step 1**: Read ROM constants to find RAM addresses (text=2056, BSS=532):
 
-These are ROM reads (safe, no DMA/uncached issues). The values tell us which RAM addresses to hardcode in the next build.
+| ROM Address | Value | Meaning |
+|-------------|-------|---------|
+| `*(0xFF85D6A4)` | **0x00005260** | RAM addr storing movie record context base |
+| `*(0xFF930C78)` | **0x00008DE4** | RAM addr storing data area base (set by FUN_ff930b04) |
+| `*(0xFF93050C)` | 0x00008968 | Verification: ring buffer struct addr (matches known) |
+
+**Step 2**: Read RAM values at discovered addresses (text=2072, BSS=532):
+
+| RAM Address | Tag | Value | Meaning |
+|-------------|-----|-------|---------|
+| `*(0x5260)` | CtxB | **0x411EDFD0** | Movie record context base (`*DAT_ff85d6a4`) |
+| `*(0x8DE4)` | DatA | **0x00000000** | Data area base — **cleared after msg 5!** |
+
+**Key discovery — IDR encoding data area is separate from P-frame ring buffers**:
+
+```
+context_base             = 0x411EDFD0
+IDR data area            = context_base + 0x200040 = 0x413EE010
+JPCORE encoder input     = context_base + 0x100040 = 0x412EE010
+```
+
+The IDR encoding output goes to **0x413EE010** (plus a header offset from `FUN_ffa19c98()`). This is a completely different memory region from the P-frame ring buffers:
+
+| Buffer | Address | Purpose |
+|--------|---------|---------|
+| IDR encoding output | 0x413EE010 + header | Where JPCORE writes IDR (msg 5) |
+| P-frame buffer 0 (RBc0) | 0x412C4720 | First P-frame delivery |
+| P-frame buffer 1 (RBc4) | 0x41304720 | Subsequent P-frame delivery |
+| DMA base (+0xD0) | 0x02AD0000 | Hardware DMA registers |
+
+This explains why reading from `RBc0 + IdrO` and `RBc4 + IdrO` returns 0xFFFFFFFF — the IDR was never written to those buffers. `IdrO` (0x158AC) is an offset within the 0x413EE010 data area, not relative to RBc0/RBc4.
+
+**`*(0x8DE4) = 0`** confirms the data area pointer is cleared after msg 5 completes (FUN_ff930b04 stores it, msg 5 uses it, then something resets it). But we can compute it directly from the context base.
+
+**Next step**: Read from `0x413EE010 + IdrO` (and nearby offsets) to find the IDR data. Also need to determine `FUN_ffa19c98()` — the header offset added to the data area base before JPCORE output.
 
 ## Future Ideas (Not Yet Implemented)
 
