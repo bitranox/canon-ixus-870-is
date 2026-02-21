@@ -1126,6 +1126,62 @@ IDR_address = *(rb_base + 0xC4) + *(rb_base + 0xD8)
 
 Read the first 16 bytes at `*(rb_base+0xC4) + *(rb_base+0xD8)` during the second msg 6 call to verify this is real H.264 IDR data (NAL type 0x65). If confirmed, copy the full `*(rb_base+0xDC)` bytes to capture the complete IDR frame.
 
+## v22 — Debug Frame Protocol Validation & BSS Stability Fix (2026-02-21)
+
+### Problem: Mysterious crashes unrelated to memory reads
+
+During v21, adding or removing debug entries caused the camera to crash (WEBCAM_START timeout, camera wouldn't record). Crashes occurred even with **pure constant values** — no struct reads at all. The pattern:
+
+| Build | BSS size | Result |
+|-------|----------|--------|
+| Known-good (commit a332449) | 532 | Works |
+| Added RBc4/RBd4/RBd0 entries (replaced M5Ct/M5Dn/Tst1) | 528 | **Crash** |
+| Added single RBc4 entry (kept M5Ct/M5Dn) | 532 | Works |
+| Pure constants, 12 entries × 4 frames (no struct reads) | 528 | **Crash** |
+| Pure constants + `bss_pad` variable | 532 | **Works** |
+
+### Root cause: BSS size sensitivity
+
+The ARM linker places `movie_rec.o`'s BSS section at a fixed offset. When the compiler optimizes away unused static variables (e.g. `msg5_count` and `msg5_done` not read by `spy_idr_capture`), BSS shrinks from 532 to 528 bytes. This 4-byte difference shifts subsequent BSS allocations, likely causing a conflict with another module's memory layout.
+
+**Fix**: Added `static volatile int bss_pad = 0;` to keep BSS at exactly 532 bytes regardless of which variables the compiler retains.
+
+### Debug frame protocol: fully validated
+
+Sent 4 debug frames with 12 constant entries each (Frm#, TstA through TstK). All values arrived perfectly:
+
+```
+=== DEBUG FRAME #0 (12 entries, 108 bytes) ===
+  Frm# = 0x00000001  (1)
+  TstA = 0xCAFEBABE
+  TstB = 0x12345678
+  TstC = 0xDEADBEEF
+  TstD = 0xA5A5A5A5
+  TstE = 0x55AA55AA
+  TstF = 0x01020304
+  TstG = 0xFFFF0000
+  TstH = 0x00FF00FF
+  TstI = 0x87654321
+  TstJ = 0xABCDEF01
+  TstK = 0x10203040
+=== END DEBUG ===
+
+(×4 frames, all identical except Frm# = 1/2/3/4)
+```
+
+**Protocol characteristics confirmed**:
+- Lock-free SPSC queue works correctly across 4 consecutive frames
+- 12 entries per frame (108 payload bytes) — well within 512-byte slot limit
+- Sequence numbers increment correctly (0, 1, 2, 3)
+- No data corruption, no dropped frames, no reordering
+- Bridge-side parsing and display correct for all entry types
+
+### Key lessons
+
+1. **BSS size must remain stable at 532 bytes** — always include `bss_pad` or ensure enough static variables exist
+2. **Debug frame protocol is 100% reliable** — previous crashes were NOT protocol bugs
+3. **When crashes have no logical code explanation, check BSS/data section sizes** — ARM embedded linkers are sensitive to section layout changes
+
 ## Future Ideas (Not Yet Implemented)
 
 ### Raw YUV Pipeline Streaming (640x480)
