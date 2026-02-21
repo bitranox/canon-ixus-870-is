@@ -1256,9 +1256,54 @@ With hardcoded addresses, all 6 ring buffer fields read correctly across 4 debug
 - `+0xDC` (IDR size) = ~46 KB, set once by msg 5
 - IDR absolute address = `0x41304720 + 0x158AC` = `0x4131FFCC` (uncached, CPU-readable)
 
-### Next step
+### v23 — P-frame pointer capture (2026-02-21)
 
-Read first 16 bytes at the computed IDR address (`0x41304720 + *(0x8A40)`) to verify H.264 IDR data. The data base is hardcoded but the offset must be read at runtime from `0x8A40`. This requires ONE level of indirection: read offset, add to constant, read from result. Build is ready but not yet deployed.
+Captured `hdr[1]` (FPtr) and `hdr[2]` (FSiz) from `spy_ring_write` to see actual P-frame addresses.
+
+**Results** (text=2124, BSS=532):
+
+| Field | Frame 1 | Frame 2 | Frame 3 | Frame 4 |
+|-------|---------|---------|---------|---------|
+| FPtr | 0x00000000 | **0x412C4720** | 0x41323D38 | 0x4132D6D4 |
+| FSiz | 0x00000000 | 0x00040000 | 0x00040000 | 0x00040000 |
+| RBd4 | 0x000158A8 | 0x0001F618 | 0x00028FB4 | 0x00032534 |
+| RB20 | 0x00000000 | 0x41319FC8 | 0x41323D38 | 0x4132D6D4 |
+
+**Key discovery — two buffer areas**:
+- **First P-frame**: FPtr = 0x412C4720 = **RBc0** (not RBc4!)
+- **Subsequent P-frames**: FPtr = RBc4 + RBd4_prev (e.g., frame 3: 0x41304720 + 0x1F618 = 0x41323D38)
+- FSiz = 0x40000 (256KB) — buffer allocation size, not frame data size
+- RB20 lags FPtr by one frame (read pointer for ring buffer consumer)
+
+### v23b — Dual-address IDR data probe (2026-02-21)
+
+Tested reading IDR data from three different computed addresses (text=2104, BSS=532):
+
+| Probe | Address | Frame 2 | Frame 3 |
+|-------|---------|---------|---------|
+| RBc0 + IdrO | 0x412D9FCC | 0xFFFFFFFF | 0xFFFFFFFF |
+| RBc4 + IdrO | 0x41319FCC | 0xFFFFFFFF | 0xFFFFFFFF |
+| RB20 direct | 0x41319FC8 | 0xFFFFFFFF | 0x24940000 |
+
+**All three IDR addresses return 0xFFFFFFFF.** Neither RBc0 nor RBc4 has IDR data at offset IdrO (0x158AC).
+
+Frame 3 Dr20 = 0x24940000 — valid P-frame AVCC data (big-endian length 0x00009424 = 37,924 bytes). This confirms P-frame data IS readable from ring buffer pointers. Only the IDR is missing.
+
+**Conclusion**: `+0xD8` (IdrO = 0x158AC) is NOT an offset relative to either RBc0 or RBc4. The IDR data is in a completely different memory region — likely the DMA context buffer at `*DAT_ff85d6a4 + 0x200040` (from Ghidra decompilation of msg 5 handler `FUN_ff85d3bc`). The ring buffer struct fields +0xC0/+0xC4 are the P-frame data areas, not the IDR encoding output.
+
+### Exhaustive IDR address search summary
+
+| Address formula | Computed | Result |
+|----------------|----------|--------|
+| RBc4 + IdrO | 0x41319FCC | 0xFFFFFFFF |
+| RBc0 + IdrO | 0x412D9FCC | 0xFFFFFFFF |
+| RB20 (frame 2) | 0x41319FC8 | 0xFFFFFFFF |
+| DMA + IdrO | 0x02AE58AC | 0xFF (v18 PTP probe) |
+| DMA\|0x40 + IdrO | 0x42AE58AC | 0xFF (v18 PTP probe) |
+| @IdrO absolute | 0x000158AC | 0x00 (v18 PTP probe) |
+| Cached mirror | 0x0131FFCC | CRASH |
+
+**Next step**: Read ROM constant at `0xFF85D6A4` to find the actual DMA context base used by msg 5. Then compute `*DAT_ff85d6a4 + 0x200040 + FUN_ffa19c98()` to find where JPCORE writes the IDR output. Alternatively, hook inside msg 5 to capture the IDR data pointer before it's consumed.
 
 ## Future Ideas (Not Yet Implemented)
 

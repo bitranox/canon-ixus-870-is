@@ -130,36 +130,44 @@ static void __attribute__((used,noinline)) spy_msg5_debug(void)
 static int __attribute__((used,noinline)) spy_idr_capture(void)
 {
     volatile unsigned int *hdr = (volatile unsigned int *)0x000FF000;
+    unsigned int idr_off, data_c0, data_c4, rb20_val, data_rb20;
 
     if (hdr[0] != 0x52455753) { idr_sent = 0; return 0; }
-    if (idr_sent >= 4) return 0;  // fire on first 4 msg 6 calls
     idr_sent++;
+    if (idr_sent != 2 && idr_sent != 3) return 0;  // Only after IDR written
 
-    // Add one real read to constants baseline
+    idr_off = *(volatile unsigned int *)0x8A40;     // +0xD8: IDR offset
+
+    // Read from RBc0 + IdrO  (0x412C4720 + idr_off)
+    if (idr_off != 0 && idr_off < 0x200000) {
+        data_c0 = *(volatile unsigned int *)(0x412C4720 + idr_off);
+    } else {
+        data_c0 = 0xDEADDEAD;
+    }
+
+    // Read from RBc4 + IdrO  (0x41304720 + idr_off) — known 0xFFFFFFFF, confirm
+    if (idr_off != 0 && idr_off < 0x200000) {
+        data_c4 = *(volatile unsigned int *)(0x41304720 + idr_off);
+    } else {
+        data_c4 = 0xDEADDEAD;
+    }
+
+    // Read from RB20 pointer directly
+    rb20_val = *(volatile unsigned int *)0x8988;    // +0x20 value
+    if (rb20_val >= 0x41000000 && rb20_val < 0x42000000) {
+        data_rb20 = *(volatile unsigned int *)rb20_val;
+    } else {
+        data_rb20 = 0xDEADDEAD;
+    }
+
     spy_debug_reset();
     spy_debug_add('F','r','m','#', idr_sent);
-    spy_debug_add('R','B','a','s', *(volatile unsigned int *)0xFF93050C);  // ring buffer struct ptr
-    spy_debug_add('R','B','c','4', *(volatile unsigned int *)0x8A2C);     // rb_base+0xC4: data area base
-    spy_debug_add('I','d','r','O', *(volatile unsigned int *)0x8A40);     // rb_base+0xD8: IDR offset
-    spy_debug_add('I','d','r','S', *(volatile unsigned int *)0x8A44);     // rb_base+0xDC: IDR size
-    spy_debug_add('R','B','d','4', *(volatile unsigned int *)0x8A3C);     // rb_base+0xD4: AVCC ptr
-    spy_debug_add('R','B','d','4', *(volatile unsigned int *)0x8A3C);     // rb_base+0xD4: AVCC ptr
-    spy_debug_add('R','B','d','0', *(volatile unsigned int *)0x8A38);     // rb_base+0xD0: DMA base
-    {
-        unsigned int idr_off = *(volatile unsigned int *)0x8A40;
-        unsigned int idr_abs = 0x41304720 + idr_off;  // hardcoded data base + offset
-        if (idr_off && idr_off < 0x00200000) {  // sanity: offset < 2MB
-            spy_debug_add('D','a','t','0', *(volatile unsigned int *)(idr_abs));
-            spy_debug_add('D','a','t','4', *(volatile unsigned int *)(idr_abs + 4));
-            spy_debug_add('D','a','t','8', *(volatile unsigned int *)(idr_abs + 8));
-            spy_debug_add('D','a','t','C', *(volatile unsigned int *)(idr_abs + 12));
-        } else {
-            spy_debug_add('D','a','t','0', 0xDEADDEAD);
-            spy_debug_add('D','a','t','4', 0xDEADDEAD);
-            spy_debug_add('D','a','t','8', 0xDEADDEAD);
-            spy_debug_add('D','a','t','C', 0xDEADDEAD);
-        }
-    }
+    spy_debug_add('I','d','r','O', idr_off);
+    spy_debug_add('I','d','r','S', *(volatile unsigned int *)0x8A44);
+    spy_debug_add('D','c','0','_', data_c0);       // Data at RBc0 + IdrO
+    spy_debug_add('D','c','4','_', data_c4);       // Data at RBc4 + IdrO
+    spy_debug_add('R','B','2','0', rb20_val);
+    spy_debug_add('D','r','2','0', data_rb20);     // Data at RB20 ptr
     spy_debug_send();
 
     return 0;
