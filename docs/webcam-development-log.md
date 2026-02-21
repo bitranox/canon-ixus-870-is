@@ -1395,7 +1395,37 @@ This explains why reading from `RBc0 + IdrO` and `RBc4 + IdrO` returns 0xFFFFFFF
 
 **`*(0x8DE4) = 0`** confirms the data area pointer is cleared after msg 5 completes (FUN_ff930b04 stores it, msg 5 uses it, then something resets it). But we can compute it directly from the context base.
 
-**Next step**: Read from `0x413EE010 + IdrO` (and nearby offsets) to find the IDR data. Also need to determine `FUN_ffa19c98()` — the header offset added to the data area base before JPCORE output.
+### v23d — Data area probe (2026-02-21)
+
+Probed the computed data area at `context_base + 0x200040 = 0x413EE010` (text=2184, BSS=532):
+
+| Probe | Address | Result |
+|-------|---------|--------|
+| Data area +0x00 | 0x413EE010 | 0xFFFFFFFF |
+| Data area +0x04 | 0x413EE014 | 0xFFFFFFFF |
+| Data area + IdrO - 4 | 0x414038B8 | 0xFFFFFFFF |
+| Data area + IdrO | 0x414038BC | 0xFFFFFFFF |
+| Data area + IdrO + 4 | 0x414038C0 | 0xFFFFFFFF |
+
+**All 0xFFFFFFFF.** The IDR data does not persist in CPU-accessible memory after msg 5 completes.
+
+### IDR memory search — dead end summary
+
+Every address derivable from the firmware has been probed. None contain IDR data by the time msg 6 fires:
+
+| Region | Addresses tried | Result |
+|--------|----------------|--------|
+| P-frame buffer 0 (+0xC0) | RBc0 + IdrO = 0x412D9FCC | 0xFFFFFFFF |
+| P-frame buffer 1 (+0xC4) | RBc4 + IdrO = 0x41319FCC | 0xFFFFFFFF |
+| RB read pointer (+0x20) | 0x41319FC8 | 0xFFFFFFFF |
+| DMA base (+0xD0) | 0x02AE58AC, 0x42AE58AC | 0xFF |
+| DMA context data area | 0x413EE010 + offsets | 0xFFFFFFFF |
+| Cached mirror | 0x0131FFCC | CRASH |
+| Absolute offset | 0x000158AC | 0x00 |
+
+**Conclusion**: The IDR is written by JPCORE via DMA into a temporary buffer, read by msg 5 for the MOV container header, and then the memory is either freed, unmapped, or overwritten. By the time the first msg 6 fires (~33ms later), the data is gone from all CPU-accessible addresses. **Reading IDR data after msg 5 is not viable.**
+
+**Path forward**: Option 2 — hook inside msg 5 to capture IDR data while it's still live (between JPCORE encoding and MOV write). This requires inline assembly to intercept the msg 5 handler at the right point.
 
 ## Future Ideas (Not Yet Implemented)
 

@@ -135,18 +135,28 @@ static int __attribute__((used,noinline)) spy_idr_capture(void)
     idr_sent++;
     if (idr_sent != 2) return 0;  // One frame only
 
-    spy_debug_reset();
-    spy_debug_add('F','r','m','#', idr_sent);
-    // RAM values from ROM pointer chain (step 2)
-    spy_debug_add('C','t','x','B', *(volatile unsigned int *)0x5260);      // *DAT_ff85d6a4: context base
-    spy_debug_add('D','a','t','A', *(volatile unsigned int *)0x8DE4);      // *DAT_ff930c78: data area base
-    // Ring buffer struct fields for reference
-    spy_debug_add('R','B','c','4', *(volatile unsigned int *)0x8A2C);      // +0xC4
-    spy_debug_add('R','B','c','0', *(volatile unsigned int *)0x8A28);      // +0xC0
-    spy_debug_add('I','d','r','O', *(volatile unsigned int *)0x8A40);      // +0xD8: IDR offset
-    spy_debug_add('I','d','r','S', *(volatile unsigned int *)0x8A44);      // +0xDC: IDR size
-    spy_debug_add('R','B','d','0', *(volatile unsigned int *)0x8A38);      // +0xD0: DMA base
-    spy_debug_send();
+    {
+        unsigned int idr_off = *(volatile unsigned int *)0x8A40;  // +0xD8: IDR offset
+        unsigned int base = 0x413EE010;  // context_base + 0x200040
+
+        spy_debug_reset();
+        spy_debug_add('F','r','m','#', idr_sent);
+        spy_debug_add('I','d','r','O', idr_off);
+        spy_debug_add('I','d','r','S', *(volatile unsigned int *)0x8A44);
+        // Probe data area at multiple offsets
+        spy_debug_add('D','_','0','0', *(volatile unsigned int *)base);             // +0x00
+        spy_debug_add('D','_','0','4', *(volatile unsigned int *)(base + 4));       // +0x04
+        if (idr_off != 0 && idr_off < 0x200000) {
+            spy_debug_add('D','I','m','4', *(volatile unsigned int *)(base + idr_off - 4));  // AVCC prefix
+            spy_debug_add('D','I','d','r', *(volatile unsigned int *)(base + idr_off));      // IDR NAL start
+            spy_debug_add('D','I','p','4', *(volatile unsigned int *)(base + idr_off + 4));  // IDR NAL +4
+        } else {
+            spy_debug_add('D','I','m','4', 0xDEADDEAD);
+            spy_debug_add('D','I','d','r', 0xDEADDEAD);
+            spy_debug_add('D','I','p','4', 0xDEADDEAD);
+        }
+        spy_debug_send();
+    }
 
     return 0;
 }
