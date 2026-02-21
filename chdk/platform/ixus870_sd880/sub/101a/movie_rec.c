@@ -130,34 +130,26 @@ static int __attribute__((used,noinline)) spy_idr_capture(void)
 {
     volatile unsigned int *hdr = (volatile unsigned int *)0x000FF000;
     unsigned int rb_base, idr_ptr_val, idr_size, data_at_ptr;
-    unsigned int dma_base, enc_handle, sps_ptr, frm_cnt;
 
     if (hdr[0] != 0x52455753) { idr_sent = 0; return 0; }
     if (idr_sent >= 2) return 0;  // fire on first 2 msg 6 calls
     idr_sent++;
 
-    rb_base     = *(volatile unsigned int *)0xFF93050C;
+    rb_base = *(volatile unsigned int *)0xFF93050C;
     idr_ptr_val = (rb_base) ? *(volatile unsigned int *)(rb_base + 0xD8) : 0;
     idr_size    = (rb_base) ? *(volatile unsigned int *)(rb_base + 0xDC) : 0;
     data_at_ptr = (idr_ptr_val && idr_ptr_val < 0x40000000)
                   ? *(volatile unsigned int *)idr_ptr_val : 0xDEADDEAD;
-    dma_base    = (rb_base) ? *(volatile unsigned int *)(rb_base + 0xD0) : 0;
-    enc_handle  = *(volatile unsigned int *)(0x51A8 + 0x7C);
-    sps_ptr     = (rb_base) ? *(volatile unsigned int *)(rb_base + 0x8C) : 0;
-    frm_cnt     = (rb_base) ? *(volatile unsigned int *)(rb_base + 0x24) : 0;
 
     spy_debug_reset();
     spy_debug_add('S','r','c','_', (idr_sent == 1) ? 0x4D362E31 : 0x4D362E32);
     spy_debug_add('R','B','a','s', rb_base);
-    spy_debug_add('D','M','A','b', dma_base);
     spy_debug_add('I','d','r','P', idr_ptr_val);
     spy_debug_add('I','d','r','S', idr_size);
     spy_debug_add('D','a','t','P', data_at_ptr);
-    spy_debug_add('E','n','c','H', enc_handle);
-    spy_debug_add('S','P','S','p', sps_ptr);
-    spy_debug_add('F','C','n','t', frm_cnt);
     spy_debug_add('M','5','C','t', msg5_count);
     spy_debug_add('M','5','D','n', msg5_done);
+    spy_debug_add('R','B','c','4', (rb_base) ? *(volatile unsigned int *)(rb_base + 0xC4) : 0);
     spy_debug_send();
 
     return 0;

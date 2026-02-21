@@ -1097,40 +1097,34 @@ Enhanced `spy_idr_capture` (msg 6 handler) to report additional metadata without
 | `M5Ct` | `0x00000000` | msg 5 still hasn't fired |
 | `M5Dn` | `0x00000000` | msg 5 still hasn't fired |
 
-### Key conclusions
+### Key conclusions (CORRECTED after v21 ring buffer base discovery)
 
 1. **Encoder handle is valid from the first msg 6**: `EncH = 0x0001AF28` — msg 4 posting is possible
-2. **IdrP is an OFFSET, not an absolute pointer**: Value `0x158AC` is too small to be a RAM address. The bridge's memory probe confirmed:
-   - `@IdrP 0x000158AC`: all zeros (unmapped low memory)
-   - `@DMAb+IdrP 0x02AE58AC`: all `0xFFFFFFFF` (DMA region — not CPU-readable!)
-   - `@(+0xC0)+IdrP 0x412D9FCC`: all `0xFFFFFFFF` (out of range)
-3. **DMA region is NOT CPU-readable**: Any attempt to read from the 0x02ADxxxx range causes a data abort
-4. **msg 5 never fires during webcam mode**: Both frames show `M5Ct=0`, `M5Dn=0` — the periodic IDR re-encode (triggered by msg 4→msg 5) doesn't happen during our webcam pipeline
-5. **SPSp = 0x280 = 640**: This matches the horizontal resolution (640 pixels). It's likely a resolution parameter, not a pointer to SPS/PPS data
+2. ~~IdrP is a file offset~~ **CORRECTED**: IdrP is an offset relative to `*(rb_base+0xC4)` — see v21 correction below
+3. ~~DMA region not CPU-readable~~ **CORRECTED**: The crash at 0x02BD0040 was reading the wrong address entirely — see v21
+4. **msg 5 never fires during webcam mode**: Both frames show `M5Ct=0`, `M5Dn=0`
+5. **SPSp = 0x280 = 640**: Matches horizontal resolution, likely a resolution parameter
 
-### What IdrP offset means
+### v21 CORRECTION: Ring buffer data base discovered
 
-The IDR pointer at `rb_base+0xD8` = `0x158AC` is an offset within the **MOV file's mdat atom**, not a RAM address. During normal recording:
-- The H.264 encoder writes IDR data into the DMA buffer
-- The file writer reads from DMA and writes to the MOV file on the SD card
-- `+0xD8` records the file offset where the IDR was written, so the MOV muxer can create the index
+**`rb_base+0xC4 = 0x41304720`** — the ring buffer data area base in **uncached RAM** (0x41xxxxxx, same range as P-frame buffers at 0x40EAxxxx).
 
-This means **the IDR data itself is only transiently present in DMA memory during encoding** — it's written by JPCORE hardware, read by the file writer DMA, and never accessible to CPU code.
-
-### Implications for IDR capture
-
-The IDR data flows through a hardware-only path:
+**Correct IDR address**:
 ```
-JPCORE encoder → DMA buffer → SD card file writer
-                     ↑
-              NOT CPU-accessible
+IDR_address = *(rb_base + 0xC4) + *(rb_base + 0xD8)
+            = 0x41304720 + 0x158AC
+            = 0x4131FFCC  (uncached, CPU-readable!)
 ```
 
-To capture IDR data for webcam streaming, we need a fundamentally different approach:
-- **Option A**: Intercept at JPCORE output before DMA (requires understanding JPCORE register interface)
-- **Option B**: Post msg 4 to trigger IDR encoding, redirect output to a CPU-readable buffer
-- **Option C**: Use the SPS/PPS from a pre-recorded MOV file + feed P-frames only (current approach with ~8s sync delay)
-- **Option D**: Configure JPCORE to produce periodic IDR frames in the P-frame ring buffer path
+**Why the earlier probe failed**: The bridge probed `@(+0xC0)+IdrP` = `0x412D9FCC` — **off by 4 bytes** (used +0xC0 instead of +0xC4), landing at the wrong address which returned 0xFFFFFFFF.
+
+**Why the DMA+0x100040 crash happened**: Address `0x02BD0040` (from Ghidra decompilation) is in the DMA configuration region, NOT the ring buffer data area. The IDR data lives in uncached RAM at `0x4131FFCC`, which is the same kind of memory the P-frames are read from at 30fps.
+
+**Decompilation confirmation**: `FUN_ff9300b4` sets `+0xD8 = *(+0xD4) + 4` — skipping a 4-byte AVCC length prefix. So `+0xD4` points to the AVCC-prefixed IDR, and `+0xD8` points past the prefix to the raw NAL data.
+
+### Next step
+
+Read the first 16 bytes at `*(rb_base+0xC4) + *(rb_base+0xD8)` during the second msg 6 call to verify this is real H.264 IDR data (NAL type 0x65). If confirmed, copy the full `*(rb_base+0xDC)` bytes to capture the complete IDR frame.
 
 ## Future Ideas (Not Yet Implemented)
 
