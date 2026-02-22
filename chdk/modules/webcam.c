@@ -3,12 +3,11 @@
 // Intercepts encoded frames from the recording pipeline via a shared
 // memory spy buffer and makes them available over PTP to a PC-side bridge.
 //
-// movie_rec.c's spy_ring_write() stores each frame's ring buffer pointer
-// and size using a seqlock protocol.  capture_frame_h264() polls the
-// seqlock counter with msleep(1) delays, then waits 10ms for cache
-// eviction before copying.  Fast failures (stale cache → invalid AVCC)
-// are returned as 0 bytes — the bridge retries immediately, keeping
-// PTP request rate high enough for H.264 P-frame continuity.
+// movie_rec.c hooks spy_ring_write into sub_FF85D98C_my after each
+// encoded frame.  spy_ring_write invalidates the CPU data cache for the
+// frame data (JPCORE DMA bypasses cache) and stores ptr/size via seqlock.
+// capture_frame_h264() polls the seqlock with msleep(10) delays to allow
+// DryOS task switching to evict stale cache lines for the spy header.
 //
 // On the first capture call, the IDR keyframe is read directly from the
 // ring buffer's +0xC0 pointer (which persists throughout recording) and
@@ -78,6 +77,7 @@ static int idr_injected = 0;
 // spy[1] = src_ptr (ring buffer pointer, set by movie_rec.c)
 // spy[2] = size    (frame data size, set by movie_rec.c)
 // spy[3] = seq     (seqlock counter: odd=writing, even=stable)
+// All accesses use uncached alias 0x400FF000 to avoid stale CPU cache reads.
 
 // ============================================================
 // H.264 frame capture from recording spy buffer
@@ -219,22 +219,10 @@ static int capture_frame_h264(void)
         }
     }
 
-    // Poll for new frame with seqlock + 10ms cache eviction delay.
-    //
-    // DMA cache coherency: JPCORE DMA writes H.264 data to ring buffer
-    // but CPU cache has stale data. msleep(10) lets other DryOS tasks
-    // evict cache lines, giving ~80% success rate at ~22fps.
-    //
-    // The 20% of frames with stale cache are returned as-is — the AVCC
-    // parser below rejects invalid data and returns 0 (no frame). The
-    // bridge retries immediately, keeping PTP request rate high (~27/sec).
-    // This maintains H.264 P-frame continuity, avoiding expensive IDR
-    // re-injection that would slow the bridge and create a vicious cycle.
-    //
-    // Longer delays (20-25ms) give higher per-frame success but lower FPS,
-    // breaking P-frame continuity and triggering constant re-injection.
-    // Camera-side retry loops (validate+retry) have the same effect.
-    // Fast failures + fast retries > slow successes for streaming H.264.
+    // Poll for new frame via seqlock, then copy.
+    // movie_rec.c's spy_ring_write invalidates CPU cache for the frame data,
+    // but the spy header itself at 0x000FF000 may still be cached. msleep(10)
+    // gives DryOS time to evict stale cache lines via task switching.
     {
         static unsigned int last_seq = 0;
         int polls;
@@ -247,16 +235,13 @@ static int capture_frame_h264(void)
 
             // Skip if write in progress (odd) or no new data (unchanged)
             if ((seq_before & 1) || seq_before == last_seq) {
-                msleep(1);
+                msleep(10);
                 continue;
             }
 
-            // New frame detected — wait for cache eviction before reading.
+            // New frame detected. msleep(10) ensures cache eviction for
+            // both spy header and frame data before memcpy.
             msleep(10);
-
-            // Re-verify frame wasn't overwritten during the wait
-            seq_after = hdr[3];
-            if (seq_before != seq_after) continue;
 
             src_ptr = (unsigned char *)hdr[1];
             size = hdr[2];
