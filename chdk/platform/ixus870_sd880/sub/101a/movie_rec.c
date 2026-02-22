@@ -23,6 +23,33 @@ static void __attribute__((used,noinline)) spy_cache_invalidate(unsigned char *p
     }
 }
 
+// Wrapper for TakeSemaphore (sub_FF8274B4) with shorter timeout when webcam is active.
+// Original firmware uses 1000ms timeout; SD card write stalls block the pipeline for
+// 2-4 seconds, causing PTP stalls (gf_rc=-1) on the bridge side.
+// When webcam is active: use 50ms timeout, return 0 (success) on timeout instead of 9.
+// When webcam is inactive: call with original timeout, return real result.
+// R0 = semaphore handle (passed through from caller's LDR R0, [R6,#0x14])
+// R1 = timeout (ignored when webcam active — we override to 50ms)
+static int __attribute__((used,noinline)) spy_take_sem_short(int sem, int timeout)
+{
+    volatile unsigned int *hdr = (volatile unsigned int *)0x000FF000;
+    // Function pointer to real TakeSemaphore
+    int (*real_take_sem)(int, int) = (int (*)(int, int))0xFF8274B4;
+
+    if (hdr[0] == 0x52455753) {
+        // Webcam active: use short timeout
+        int result = real_take_sem(sem, 50);
+        if (result == 9) {
+            // Timeout — return success so recording pipeline continues
+            return 0;
+        }
+        return result;
+    } else {
+        // Normal operation: use original timeout
+        return real_take_sem(sem, timeout);
+    }
+}
+
 // Store H.264 frame pointer+size using seqlock protocol.
 // Called from sub_FF85D98C_my after sub_FF92FE8C returns each encoded frame.
 // Invalidates CPU cache for the frame data so webcam.c's memcpy reads
@@ -256,7 +283,7 @@ void __attribute__((naked,noinline)) sub_FF85D98C_my(){
                  "BL      sub_FF8EDBE0\n"
                  "LDR     R0, [R6,#0x14]\n"
                  "MOV     R1, #0x3E8\n"
-                 "BL      sub_FF8274B4\n"
+                 "BL      spy_take_sem_short\n"
                  "CMP     R0, #9\n"
                  "BEQ     loc_FF85DBA4\n"
                  "LDR     R0, [SP,#0x38]\n"
@@ -304,7 +331,7 @@ void __attribute__((naked,noinline)) sub_FF85D98C_my(){
                  "BL      sub_FF8EDBE0\n"
                  "LDR     R0, [R6,#0x14]\n"
                  "MOV     R1, #0x3E8\n"
-                 "BL      sub_FF8274B4\n"
+                 "BL      spy_take_sem_short\n"
                  "CMP     R0, #9\n"
                  "BNE     loc_FF85DBB4\n"
  "loc_FF85DBA4:\n"
@@ -350,7 +377,7 @@ void __attribute__((naked,noinline)) sub_FF85D98C_my(){
                  "BL      sub_FF8EDBE0\n"
                  "LDR     R0, [R6,#0x14]\n"
                  "MOV     R1, #0x3E8\n"
-                 "BL      sub_FF8274B4\n"
+                 "BL      spy_take_sem_short\n"
                  "CMP     R0, #9\n"
                  "BNE     loc_FF85DC64\n"
                  "BL      sub_FF930358\n"
