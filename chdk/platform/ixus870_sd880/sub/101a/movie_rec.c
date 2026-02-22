@@ -133,38 +133,27 @@ static int __attribute__((used,noinline)) spy_idr_capture(void)
 
     if (hdr[0] != 0x52455753) { return 0; }  // Skip but don't reset counter
     idr_sent++;
-    if (idr_sent != 2) return 0;  // Send exactly one debug frame on call 2
+
+    // Send debug frames at call 2 (early) and call 500 (~16s into recording)
+    if (idr_sent != 2 && idr_sent != 500) return 0;
 
     {
         // Ring buffer struct at 0x8968:
         //   +0xC0 (0x8A28) = first-frame pointer (IDR data address)
-        //   +0x70 (0x89D8) = frame size
-        //   +0x28 (0x8990) = frame counter
         //   +0xD8 (0x8A40) = IDR offset in data area (MOV metadata)
         //   +0xDC (0x8A44) = IDR size (MOV metadata)
         unsigned int first_ptr  = *(volatile unsigned int *)0x8A28;  // +0xC0
-        unsigned int frame_size = *(volatile unsigned int *)0x89D8;  // +0x70
-        unsigned int frame_cnt  = *(volatile unsigned int *)0x8990;  // +0x28
-        unsigned int idr_off    = *(volatile unsigned int *)0x8A40;  // +0xD8
         unsigned int idr_sz     = *(volatile unsigned int *)0x8A44;  // +0xDC
 
         spy_debug_reset();
-        spy_debug_add('F','P','t','r', first_ptr);    // First-frame pointer from +0xC0
-        spy_debug_add('F','S','i','z', frame_size);   // Frame size from +0x70
-        spy_debug_add('F','C','n','t', frame_cnt);    // Frame counter from +0x28
-        spy_debug_add('I','O','f','f', idr_off);      // IDR offset from +0xD8
-        spy_debug_add('I','S','i','z', idr_sz);       // IDR size from +0xDC
-        // Probe first 16 bytes at the first-frame pointer
-        // AVCC format: [4-byte length][NAL byte][data...]
-        // IDR NAL type = 0x65 (type 5), P-frame = 0x41/0x61 (type 1)
+        spy_debug_add('M','6','C','t', idr_sent);     // msg 6 call count
+        spy_debug_add('M','5','C','t', msg5_count);    // msg 5 call count — key question!
+        spy_debug_add('F','P','t','r', first_ptr);     // First-frame pointer from +0xC0
+        spy_debug_add('I','S','i','z', idr_sz);        // IDR size from +0xDC
+        // Check if +0xC0 data changed (would indicate IDR refresh)
         if (first_ptr != 0 && first_ptr > 0x1000 && first_ptr < 0x80000000) {
-            spy_debug_add('N','A','L','0', *(volatile unsigned int *)first_ptr);        // bytes 0-3 (length)
-            spy_debug_add('N','A','L','4', *(volatile unsigned int *)(first_ptr + 4));  // bytes 4-7 (NAL hdr)
-            spy_debug_add('N','A','L','8', *(volatile unsigned int *)(first_ptr + 8));  // bytes 8-11
-        } else {
-            spy_debug_add('N','A','L','0', 0xDEADDEAD);
-            spy_debug_add('N','A','L','4', 0xDEADDEAD);
-            spy_debug_add('N','A','L','8', 0xDEADDEAD);
+            spy_debug_add('N','A','L','0', *(volatile unsigned int *)first_ptr);
+            spy_debug_add('N','A','L','4', *(volatile unsigned int *)(first_ptr + 4));
         }
         spy_debug_send();
     }

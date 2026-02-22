@@ -1534,36 +1534,36 @@ The scanner rebuilds only the IDR NAL in AVCC format (no in-band SPS/PPS — bri
 
 **Problem**: After 5 successful frames, all subsequent P-frames fail with "Decoder needs more data" (EAGAIN). Bridge-side diagnostics dumps (~130 lines of stderr per "no frame" response) and PTP memory probes (6 round-trips on M6.2 debug frames) block the main loop long enough to miss P-frames. Once P-frames are missed, the decoder loses its reference chain and never recovers.
 
-**Key finding — Camera produces periodic IDR frames (GOP=15)**:
+**MOV file analysis — GOP=15 in recorded files**:
 
 Analysis of the camera's own MOV file (`MVI_4032.MOV`, 604 frames) reveals the stss (sync sample) atom:
 ```
 stss: 41 keyframes at samples 1, 16, 31, 46, 61, 76, 91, ...
 ```
-The H.264 encoder produces an **IDR every 15 frames** (0.5 seconds at 30fps). This is NOT a single-IDR stream.
+The MOV muxer marks a sync sample every 15 frames. However, this does NOT necessarily mean the encoder produces IDR NALs every 15 frames — the sync samples could be all-intra P-frames or the keyframe scheduling may differ between normal recording and our hooked recording.
 
-**Key finding — Periodic IDRs go through msg 5, not msg 6**:
+**DISPROVEN — msg 5 does NOT fire periodically**:
 
-Despite producing 41 IDRs across 604 frames, the bridge received 300+ frames via spy_ring_write — ALL with NAL type `0x61` (P-frame). Zero periodic IDRs arrived. The reason:
-
-- **msg 5** (`sub_FF85D3BC`): Handles IDR encoding. Called periodically every 15 frames.
-- **msg 6** (`sub_FF85D98C_my` → `sub_FF92FE8C`): Handles regular P-frame encoding.
-- `spy_ring_write` is hooked **only in msg 6**. The periodic IDRs produced by msg 5 are never captured.
-
-**Message flow for a recording session**:
+Instrumented spy_idr_capture to report `msg5_count` at msg 6 call 2 (early) and call 500 (~16s into recording):
 ```
-msg 6 call 1  → P-frame (or STATE 3→4 promotion, IDR via +0xC0)
-msg 5         → IDR encoding (every 15th frame)
-msg 6 call 2  → P-frame
-msg 6 call 3  → P-frame
-...
-msg 6 call 15 → P-frame
-msg 5         → IDR encoding (next keyframe)
-msg 6 call 16 → P-frame
-...
+DEBUG FRAME #0 (call 2):   M6Ct = 2,   M5Ct = 0
+DEBUG FRAME #1 (call 500): M6Ct = 500, M5Ct = 0
 ```
+After 500 msg 6 calls, msg 5 has fired **zero times**. Msg 5 (`sub_FF85D3BC`) does not participate in our recording session at all. The initial IDR at +0xC0 is produced by `sub_FF92FE8C` (msg 6) on the first call, not by msg 5.
 
-**Next step**: Hook msg 5 to also deliver IDR frames via spy_ring_write. The IDR data is available at ring buffer +0xC0 (`0x8A28`) / +0xDC (`0x8A44`) immediately after msg 5 completes. With periodic IDRs every 0.5 seconds, the decoder can self-heal after any dropped P-frames.
+**All 500+ frames from sub_FF92FE8C are P-frames** (NAL type `0x61`). No periodic IDR frames arrive through this path. The camera's H.264 encoder produces a single IDR at recording start and then exclusively P-frames for the entire session.
+
+### v23c: Diagnostics suppression test
+
+Disabled bridge-side diagnostics dumps and memory probes. Result:
+- **11 frames decoded at 5.5 FPS** in the first stats interval (up from 5 frames before)
+- Decoder still breaks after initial burst — all subsequent P-frames return EAGAIN
+- Root cause still under investigation: even with fast polling, P-frames eventually become undecodable
+
+**Open questions**:
+1. Why does the decoder break after ~11 frames despite no diagnostics blocking?
+2. Are the MOV periodic keyframes (GOP=15) produced by a different encoder configuration than our hooked recording?
+3. Can we force periodic IDR re-injection from the stored +0xC0 data to make the decoder self-heal?
 
 ## Future Ideas (Not Yet Implemented)
 
