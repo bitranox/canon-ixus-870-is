@@ -220,21 +220,36 @@ static int capture_frame_h264(void)
     sem_ret = TakeSemaphore(frame_sem, 100);
     if (sem_ret != 0) return 0;  // Timeout — no frame available
 
-    // Copy from ring buffer pointer stored by spy_ring_write.
-    // hdr[1] = source pointer (ring buffer address from sub_FF92FE8C)
-    // hdr[2] = frame data size
+    // Seqlock copy: read sequence before memcpy, re-read after.
+    // If sequence changed during copy, the ring buffer was overwritten
+    // by a new frame — data is stale, retry with the new pointer.
+    // Up to 3 attempts to get a consistent copy.
     {
-        unsigned char *src_ptr = (unsigned char *)hdr[1];
-        size = hdr[2];
-        if (!src_ptr || size == 0) return 0;
-        if (size > SPY_BUF_SIZE) size = SPY_BUF_SIZE;
-        memcpy(frame_data_buf, src_ptr, size);
+        int attempt;
+        for (attempt = 0; attempt < 3; attempt++) {
+            unsigned int seq_before, seq_after;
+            unsigned char *src_ptr;
+
+            seq_before = hdr[3];
+            // If seq is odd, a write is in progress — spin briefly
+            if (seq_before & 1) continue;
+
+            src_ptr = (unsigned char *)hdr[1];
+            size = hdr[2];
+            if (!src_ptr || size == 0) return 0;
+            if (size > SPY_BUF_SIZE) size = SPY_BUF_SIZE;
+
+            memcpy(frame_data_buf, src_ptr, size);
+
+            seq_after = hdr[3];
+            if (seq_before == seq_after) break;  // Consistent copy
+            // Sequence changed — data was overwritten during copy, retry
+        }
+        if (attempt >= 3) return 0;  // All attempts failed
     }
 
     // Parse AVCC NAL units to determine actual H.264 frame size.
-    // spy_ring_write copies min(ring_chunk_size, 64KB).  The actual
-    // encoded frame (~5-40 KB) is a prefix of that data.
-    //
+    // The ring buffer chunk may be larger than the encoded frame.
     // AVCC format: [4-byte big-endian length][NAL data] per NAL unit.
     // Canon Baseline profile: one slice NAL per frame (type 1 or 5),
     // optionally preceded by SEI (type 6).

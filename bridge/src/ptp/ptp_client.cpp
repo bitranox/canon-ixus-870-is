@@ -863,8 +863,10 @@ bool PTPClient::get_frame(MJPEGFrame& frame) {
                 }
             }
         }
-        impl_->last_error = "no frame (gf_rc=" +
-                            std::to_string(resp.num_params >= 3 ? static_cast<int>(resp.params[2]) : 0) + ")";
+        {
+            int gf_rc = resp.num_params >= 3 ? static_cast<int>(resp.params[2]) : 0;
+            impl_->last_error = "no frame (gf_rc=" + std::to_string(gf_rc) + ")";
+        }
         return false;
     }
 

@@ -286,13 +286,18 @@ int main(int argc, char* argv[]) {
 
     // --- Main streaming loop ---
     auto start_time = std::chrono::steady_clock::now();
-    auto frame_interval = std::chrono::microseconds(1000000 / opts.target_fps);
     auto stats_interval = std::chrono::seconds(2);
     auto last_stats = std::chrono::steady_clock::now();
     int frames_received = 0;
     int frames_dropped = 0;
+    int frames_skipped = 0;      // frames produced by camera but never received (frame_num gaps)
     int total_bytes = 0;
     uint32_t last_frame_num = 0;
+
+    // Cumulative stats for final summary
+    int total_received = 0;
+    int total_dropped = 0;
+    int total_skipped = 0;
 
     while (g_running) {
         // Check timeout
@@ -321,21 +326,32 @@ int main(int argc, char* argv[]) {
             auto now_check = std::chrono::steady_clock::now();
             if (now_check - last_stats >= stats_interval) {
                 auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now_check - last_stats).count();
-                printf("\r[Stats] FPS: 0.0 | Frames: 0 | Dropped: %d | %s    \n",
-                       frames_dropped, client.get_last_error().c_str());
+                printf("\r[Stats] FPS: 0.0 | Recv: 0 | Drop: %d | Skip: %d | %s    \n",
+                       frames_dropped, frames_skipped, client.get_last_error().c_str());
+                total_dropped += frames_dropped;
+                total_skipped += frames_skipped;
                 frames_dropped = 0;
+                frames_skipped = 0;
                 last_stats = now_check;
             }
             // Sleep before retry — not too fast or PTP polling starves
-            // the camera's recording task (DryOS cooperative scheduling)
+            // the camera's recording task (DryOS cooperative scheduling).
             std::this_thread::sleep_for(std::chrono::milliseconds(33));
             continue;
         }
 
         // Check for duplicate frames
         if (mjpeg.frame_num == last_frame_num && last_frame_num != 0) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
             continue;
+        }
+
+        // Detect frame gaps (frames produced by camera but never received)
+        if (last_frame_num != 0 && mjpeg.frame_num > last_frame_num + 1) {
+            int gap = mjpeg.frame_num - last_frame_num - 1;
+            frames_skipped += gap;
+            fprintf(stderr, "FRAME GAP: %d frames lost (cam #%u -> #%u)\n",
+                    gap, last_frame_num, mjpeg.frame_num);
         }
         last_frame_num = mjpeg.frame_num;
 
@@ -585,24 +601,42 @@ int main(int argc, char* argv[]) {
             auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_stats).count();
             float fps = (elapsed_ms > 0) ? (frames_received * 1000.0f / elapsed_ms) : 0;
             float kbps = (elapsed_ms > 0) ? (total_bytes * 8.0f / elapsed_ms) : 0;
-            printf("\r[Stats] FPS: %.1f | Frames: %d | Dropped: %d | Bitrate: %.0f kbps | Avg frame: %.1f KB    \n",
-                   fps, frames_received, frames_dropped, kbps,
+            printf("\r[Stats] FPS: %.1f | Recv: %d | Drop: %d | Skip: %d | %.0f kbps | %.1f KB/f    \n",
+                   fps, frames_received, frames_dropped, frames_skipped, kbps,
                    frames_received > 0 ? (total_bytes / 1024.0f / frames_received) : 0.0f);
+            total_received += frames_received;
+            total_dropped += frames_dropped;
+            total_skipped += frames_skipped;
             frames_received = 0;
             frames_dropped = 0;
+            frames_skipped = 0;
             total_bytes = 0;
             last_stats = now;
         }
 
-        // Frame rate limiting
-        auto frame_end = std::chrono::steady_clock::now();
-        auto frame_time = frame_end - frame_start;
-        if (frame_time < frame_interval) {
-            std::this_thread::sleep_for(frame_interval - frame_time);
-        }
+        // No frame rate limiter — camera-side TakeSemaphore paces at 30fps.
+        // Adding sleep here would only cause frame loss.
     }
 
     // --- Cleanup ---
+    // Flush remaining window stats into cumulative totals
+    total_received += frames_received;
+    total_dropped += frames_dropped;
+    total_skipped += frames_skipped;
+
+    printf("\n=== SESSION SUMMARY ===\n");
+    printf("  Received: %d frames\n", total_received);
+    printf("  Dropped:  %d (decode failures)\n", total_dropped);
+    printf("  Skipped:  %d (camera-produced but never received)\n", total_skipped);
+    printf("  Last cam frame#: %u\n", last_frame_num);
+    if (last_frame_num > 0) {
+        int expected = (int)last_frame_num;
+        int actual = total_received + total_dropped;
+        printf("  Camera produced: ~%d frames, bridge saw: %d (%.1f%%)\n",
+               expected, actual, expected > 0 ? (actual * 100.0f / expected) : 0.0f);
+    }
+    printf("=======================\n");
+
     printf("\nStopping...\n");
     if (g_debug_log) { fclose(g_debug_log); g_debug_log = nullptr; }
     preview.shutdown();

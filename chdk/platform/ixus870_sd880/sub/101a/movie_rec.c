@@ -11,17 +11,20 @@ void  set_quality(int *x){ // -17 highest; +12 lowest
 }
 
 
-// Store H.264 frame pointer and signal semaphore.
+// Store H.264 frame pointer and signal semaphore (seqlock protocol).
 // Called from sub_FF85D98C_my after sub_FF92FE8C returns each encoded frame.
 // Does NOT copy data — just stores the ring buffer pointer for the webcam module
-// to read directly via its own memcpy. Simple overwrite protocol: always writes the latest frame.
-// The consumer reads whenever it wakes on the semaphore.
+// to read directly via its own memcpy.
+//
+// Seqlock protocol: hdr[3] is incremented BEFORE and AFTER writing ptr+size.
+// Reader checks hdr[3] before and after memcpy: if it changed or is odd,
+// a concurrent write happened and the data may be stale.
 //
 // Shared memory protocol at 0x000FF000 (initialized by webcam.c):
 //   [0] magic    = 0x52455753 when active (set by webcam.c)
 //   [1] src_ptr  = ring buffer pointer (written here, read by webcam.c)
 //   [2] size     = frame data size (written here)
-//   [3] count    = frame counter (written LAST, here)
+//   [3] seq      = seqlock counter (odd = write in progress, even = stable)
 //   [5] sem      = semaphore handle (set by webcam.c)
 static void __attribute__((used,noinline)) spy_ring_write(unsigned char *ptr, unsigned int size)
 {
@@ -30,9 +33,10 @@ static void __attribute__((used,noinline)) spy_ring_write(unsigned char *ptr, un
 
     if (hdr[0] != 0x52455753) return;  // Not initialized by webcam.c
 
+    hdr[3]++;                          // Seq odd = write in progress
     hdr[1] = (unsigned int)ptr;        // Source pointer (ring buffer address)
     hdr[2] = size;                     // Frame data size
-    hdr[3]++;                          // Frame counter (incremented LAST)
+    hdr[3]++;                          // Seq even = write complete
 
     sem_handle = hdr[5];
     if (sem_handle != 0) {
