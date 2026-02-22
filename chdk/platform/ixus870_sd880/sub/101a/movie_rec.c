@@ -144,8 +144,8 @@ static int __attribute__((used,noinline)) spy_idr_capture(void)
         spy_debug_add('I','d','r','O', idr_off);
         spy_debug_add('I','d','r','S', *(volatile unsigned int *)0x8A44);
         // Probe data area at multiple offsets
-        spy_debug_add('D','_','0','0', *(volatile unsigned int *)base);             // +0x00
-        spy_debug_add('D','_','0','4', *(volatile unsigned int *)(base + 4));       // +0x04
+        spy_debug_add('D','_','0','0', *(volatile unsigned int *)0xFF930C78);        // ROM: DAT_ff930c78
+        spy_debug_add('D','_','0','4', msg5_done);                                  // msg 5 ran?
         if (idr_off != 0 && idr_off < 0x200000) {
             spy_debug_add('D','I','m','4', *(volatile unsigned int *)(base + idr_off - 4));  // AVCC prefix
             spy_debug_add('D','I','d','r', *(volatile unsigned int *)(base + idr_off));      // IDR NAL start

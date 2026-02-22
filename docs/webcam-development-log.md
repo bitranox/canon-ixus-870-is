@@ -1427,6 +1427,39 @@ Every address derivable from the firmware has been probed. None contain IDR data
 
 **Path forward**: Option 2 — hook inside msg 5 to capture IDR data while it's still live (between JPCORE encoding and MOV write). This requires inline assembly to intercept the msg 5 handler at the right point.
 
+## v23 — Msg 5 Timing Discovery & ROM Pointer Probe (2026-02-22)
+
+**Goal**: Capture IDR data by hooking msg 5 (Option 2). Need to understand msg ordering and discover the data area pointer address.
+
+**Key discoveries**:
+
+1. **Message ordering**: msg 5 has NOT fired by `idr_sent==2` (second msg 6 call). `M5Dn = 0x00000000` confirms this. The recording pipeline starts producing P-frames (msg 6) before the IDR encoding (msg 5) completes. This means msg 5 and msg 6 run on different timing — msg 6 fires from the pipeline callbacks set up DURING msg 5 execution.
+
+2. **Data area pointer location discovered**: `*(0xFF930C78) = 0x00008DE4`. The ROM data reference `DAT_ff930c78` (used by `FUN_ff930b04` to store the data area base) points to RAM address **0x8DE4**. During msg 5, `FUN_ff930b04` writes `iVar2 + 0x200040` to `*(0x8DE4)`.
+
+3. **Shared memory (0xFF000) corruption**: The shared memory region at 0xFF000 is actively overwritten by firmware DMA during recording. `spy magic` (hdr[0]) shows random garbage values on every PTP poll. Debug frames only survive if sent during a msg 6 call that coincides with active PTP polling — a narrow timing window.
+
+4. **idr_sent counter is fragile**: Because the magic check (`hdr[0] != 0x52455753`) randomly fails due to DMA corruption, `idr_sent` gets reset to 0 on "bad" polls. The counter only reaches 2 when magic happens to be valid on two consecutive msg 6 calls — a lucky timing event.
+
+5. **Camera stability is fragile**: Any code changes to movie_rec.c can cause the camera to crash (USB I/O errors, hard lockup). The crashes are intermittent and not always caused by obvious bugs — recompilation itself can shift code alignment enough to trigger issues. Battery removal is required to recover from crash states.
+
+**Address table update** (add to existing):
+
+| Field | Address | Source | Description |
+|-------|---------|--------|-------------|
+| data_area_ptr | 0x8DE4 | `*(0xFF930C78)` | Data area pointer (set by FUN_ff930b04 during msg 5) |
+
+**Test results** (idr_sent==2 debug frame):
+```
+IdrO = 0x000158AC  (88236)   — IDR offset in data area
+IdrS = 0x0000B560  (46432)   — IDR size (~45 KB)
+D_00 = 0x00008DE4            — *(0xFF930C78): RAM addr of data area ptr
+D_04 = 0x00000000            — msg5_done: msg 5 NOT yet run
+DIm4 = 0xFFFFFFFF            — data area + idr_off still shows 0xFF (DMA flushed)
+```
+
+**Next step**: Need to capture `*(0x8DE4)` during msg 5 (when it holds the live data area pointer) and probe the IDR data at `*(0x8DE4) + 0x158AC`. The challenge is delivering this data to the bridge — debug frames sent during msg 5 context get corrupted before PTP polling reads them. Solution: store in statics during msg 5, read from msg 6 debug frame after msg5_done==1. But the msg5_done guard requires msg 5 to fire first, and the narrow magic-valid window may close before that happens. May need to remove the `idr_sent = 0` reset on magic failure to let the counter accumulate across valid polls.
+
 ## Future Ideas (Not Yet Implemented)
 
 ### Raw YUV Pipeline Streaming (640x480)
