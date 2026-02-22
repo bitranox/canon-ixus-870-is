@@ -1766,3 +1766,36 @@ The simple polling+seqlock approach (no cache tricks) is the correct solution:
 The ~550 "drops" are PTP requests where the camera's AVCC parser rejected corrupted data (stale cache in the 4-byte AVCC length prefix). This is a camera-side limitation of the natural cache eviction approach, not a bridge-side decode failure. All frames that pass the AVCC parser decode correctly.
 
 Every approach that touches the recording pipeline's hot path (cache invalidation, memcpy in spy_ring_write, uncacheable reads) causes DryOS starvation. The recording pipeline is extremely timing-sensitive — the only safe approach is to let cache eviction happen naturally via msleep() delays.
+
+### Solution: 10ms cache eviction delay
+
+Instead of reading frame data immediately after detecting a new frame (seqlock change), sleep 10ms first to let other DryOS tasks evict stale cache lines. Then re-verify the seqlock before memcpy.
+
+```c
+// Detect new frame (seq changed, even)
+msleep(10);              // Let other tasks evict cache lines
+// Re-verify seq hasn't changed (frame not overwritten)
+// Then memcpy from ring buffer
+```
+
+At 30fps, frames arrive every 33ms. A 10ms delay leaves 23ms margin before the next frame overwrites the ring buffer slot. The seqlock re-check after the delay catches any overwrites.
+
+**Test result (2026-02-22)**:
+```
+=== SESSION SUMMARY ===
+  Received: 445 frames
+  Dropped:  107 (decode failures)
+  Unique data: 445 frames
+  Duplicate data: 0 frames (identical to previous)
+=======================
+```
+
+- **445 unique frames in 20 seconds** (~22 fps average) — up from 33 with immediate memcpy
+- **0 duplicates** — every frame has different data
+- **20-26 FPS sustained** with bursts up to 48 FPS
+- **Only 107 drops** (down from 550) — 80% success rate vs 5.6% before
+- **Camera recorded full 20 seconds without stalling**
+- Proper IDR + P-frame mix, all frames decoded successfully by FFmpeg
+- IDR re-injection fired ~8 times (P-frame continuity gaps from skipped frames)
+
+**Why it works**: 10ms of DryOS task scheduling allows dozens of other tasks (USB, filesystem, LCD, etc.) to run. Each task's memory accesses evict cache lines from the stale ring buffer data. By the time memcpy runs, most of the ~1250 cache lines (40KB / 32B) covering the frame data have been replaced with other data, forcing cache misses that read fresh DMA data from physical memory.

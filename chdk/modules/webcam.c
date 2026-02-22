@@ -237,12 +237,18 @@ static int capture_frame_h264(void)
                 continue;
             }
 
+            // New frame detected — wait for cache eviction before reading.
+            // Other DryOS tasks running during this sleep evict stale cache
+            // lines, so the subsequent memcpy reads fresh DMA data.
+            msleep(10);
+
+            // Re-verify frame wasn't overwritten during the wait
+            seq_after = hdr[3];
+            if (seq_before != seq_after) continue;
+
             src_ptr = (unsigned char *)hdr[1];
             size = hdr[2];
-            if (!src_ptr || size == 0) {
-                msleep(1);
-                continue;
-            }
+            if (!src_ptr || size == 0) continue;
             if (size > SPY_BUF_SIZE) size = SPY_BUF_SIZE;
 
             memcpy(frame_data_buf, src_ptr, size);
