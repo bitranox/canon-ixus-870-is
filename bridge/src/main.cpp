@@ -334,9 +334,8 @@ int main(int argc, char* argv[]) {
                 frames_skipped = 0;
                 last_stats = now_check;
             }
-            // Sleep before retry — not too fast or PTP polling starves
-            // the camera's recording task (DryOS cooperative scheduling).
-            std::this_thread::sleep_for(std::chrono::milliseconds(33));
+            // Sleep before retry (failure path only — rarely hit with seqlock).
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
             continue;
         }
 
