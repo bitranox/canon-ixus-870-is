@@ -767,42 +767,32 @@ bool PTPClient::get_frame(MJPEGFrame& frame) {
                     }
                 }
 
-                // ---- Block 6 (384-455): ISP routing + dispatch state ----
-                if (data.size() >= 456) {
-                    fprintf(stderr, "  --- Block 6: ISP Routing + Dispatch ---\n");
-                    uint32_t isp_src = u32(384);
-                    fprintf(stderr, "    ISP src 0xC0F110C4   = 0x%08X  %s\n", isp_src,
-                            isp_src == 5 ? "(=5, VIDEO — JPCORE routed!)" :
-                            isp_src == 4 ? "*** =4, EVF — JPCORE NOT routed! ***" :
-                            "(unknown)");
-                    fprintf(stderr, "    hw_frame_index       = %u\n", u32(388));
-                    fprintf(stderr, "    ISP scale 0xC0F111C4 = 0x%08X\n", u32(392));
-                    fprintf(stderr, "    ISP en 0xC0F111C0    = 0x%08X  %s\n", u32(396),
-                            u32(396) == 1 ? "(enabled)" : "");
-                    fprintf(stderr, "    ISP cfg 0xC0F111C8   = 0x%08X\n", u32(400));
-                    uint32_t jpcore_en = u32(404);
-                    fprintf(stderr, "    JPCORE en 0xC0F0103C = 0x%08X  %s\n", jpcore_en,
-                            (jpcore_en & 0x10000) ? "(enabled)" : "*** DISABLED! ***");
-                    uint32_t dispatch = u32(408);
-                    fprintf(stderr, "    dispatch @0xB8C0     = %u  %s\n", dispatch,
-                            dispatch == 2 ? "(VIDEO path)" :
-                            dispatch == 1 ? "*** EVF path! ***" :
-                            "(unknown)");
-                    fprintf(stderr, "    video mode +0xD4     = %u  %s\n", u32(412),
-                            u32(412) == 2 ? "(VGA video)" :
-                            u32(412) == 1 ? "*** EVF! ***" : "");
-                    fprintf(stderr, "    MJPEG active +0x48   = %u\n", u32(416));
-                    fprintf(stderr, "    frame skip +0xF0     = %u  %s\n", u32(420),
-                            u32(420) == 1 ? "(=1, ok)" : "");
-                    fprintf(stderr, "    pipeline +0xEC       = %u\n", u32(424));
-                    fprintf(stderr, "    GCMJVD return        = %d\n", (int)u32(428));
-                    fprintf(stderr, "    sec_state+4          = 0x%08X\n", u32(432));
-                    fprintf(stderr, "    sec_state+8          = 0x%08X\n", u32(436));
-                    fprintf(stderr, "    rec buf +0x6C        = 0x%08X  %s\n", u32(440),
-                            u32(440) == 0 ? "(=0, NO callback data!)" : "(has buffer)");
-                    fprintf(stderr, "    rec cb1 +0x114       = 0x%08X\n", u32(444));
-                    fprintf(stderr, "    state+0x100          = 0x%08X\n", u32(448));
-                    fprintf(stderr, "    state+0x104          = 0x%08X\n", u32(452));
+                // ---- Block 6 (384-415): IDR Injection Debug ----
+                if (data.size() >= 416) {
+                    uint32_t idr_state = u32(384);
+                    fprintf(stderr, "  --- Block 6: IDR Injection Debug ---\n");
+                    fprintf(stderr, "    idr_dbg_state  = 0x%X  %s\n", idr_state,
+                            idr_state == 0 ? "(not tried)" :
+                            idr_state == 1 ? "(entered)" :
+                            idr_state == 2 ? "(ptr ok)" :
+                            idr_state == 3 ? "(scanning)" :
+                            idr_state == 4 ? "(SUCCESS)" :
+                            idr_state == 0xE0 ? "(ERR: ptr invalid)" :
+                            idr_state == 0xE1 ? "(ERR: bad NAL len)" :
+                            idr_state == 0xE2 ? "(ERR: buf overflow)" :
+                            idr_state == 0xE3 ? "(ERR: bad start code)" :
+                            idr_state == 0xE4 ? "(ERR: no IDR found)" : "(unknown)");
+                    fprintf(stderr, "    idr_bytes24_27 = 0x%08X\n", u32(388));
+                    fprintf(stderr, "    idr_dbg_ptr    = 0x%08X\n", u32(392));
+                    fprintf(stderr, "    idr_dbg_size   = %u (0x%X)\n", u32(396), u32(396));
+                    fprintf(stderr, "    idr_dbg_nals   = %u\n", u32(400));
+                    fprintf(stderr, "    idr_dbg_dst    = %u\n", u32(404));
+                    fprintf(stderr, "    idr_bytes28_31 = 0x%08X\n", u32(408));
+                    uint32_t nal2 = u32(412);
+                    fprintf(stderr, "    idr_nal2_info  = 0x%08X  (byte=0x%02X type=%u len_hi=0x%02X end_at_limit=%s)\n",
+                            nal2, (nal2 >> 24) & 0xFF, (nal2 >> 16) & 0xFF,
+                            (nal2 >> 8) & 0xFF, (nal2 & 0xFF) == 0xFF ? "YES" : "no");
+                    fprintf(stderr, "    idr_injected   = %u\n", u32(416));
                 }
 
                 // ---- Block 7 (456-511): More JPCORE ----

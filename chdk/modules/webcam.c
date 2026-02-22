@@ -150,6 +150,21 @@ static unsigned char *frame_data_buf = NULL;
 static int frame_sem = 0;                  // DryOS binary semaphore for frame signaling
 #define SPY_BUF_SIZE 65536                 // 64 KB — enough for any H.264 frame
 
+// IDR injection: the first H.264 frame (IDR) is lost due to a race condition
+// (spy_ring_write fires before PTP polling starts). The IDR data persists at
+// the ring buffer +0xC0 pointer throughout recording, in Annex B format.
+// We read it directly and convert to AVCC on the first capture call.
+static int idr_injected = 0;              // 1 after IDR has been sent as first frame
+// IDR injection diagnostics (reported in hw_diag for bridge visibility)
+static unsigned int idr_dbg_state = 0;    // 0=not tried, 1=entered, 2=ptr ok, 3=scanning, 4=success, 0xEn=error
+static unsigned int idr_dbg_fcnt = 0;     // frame counter from +0x28
+static unsigned int idr_dbg_ptr = 0;      // first_ptr from +0xC0
+static unsigned int idr_dbg_size = 0;     // idr_size from +0xDC
+static unsigned int idr_dbg_nals = 0;     // NAL units found by scanner
+static unsigned int idr_dbg_dst = 0;      // dst_pos (total AVCC output size)
+static unsigned int idr_dbg_byte0 = 0;    // bytes 16-19 at first_ptr (SPS→PPS transition)
+static unsigned int idr_dbg_nal2type = 0; // NAL2 start byte and type info
+
 // Note: SPS/PPS for H.264 decoding is hardcoded in the PC bridge's FFmpeg
 // decoder (extracted from the camera's MOV avcC atom). The spy buffer never
 // contains SPS/PPS — Canon stores it only in the MOV container metadata.
@@ -1333,6 +1348,18 @@ static int capture_frame_h264(void)
         D32(116, dbg_nal_len);         // first NAL length parsed
         D32(120, dbg_nal_hdr);         // first NAL header byte
         D32(124, dbg_parse_result);    // parser outcome bits
+        // IDR injection diagnostics (Block 6 area, offset 384-415)
+        // NOTE: offsets 128-383 are overwritten by frame data dump later,
+        // so IDR debug must go at 384+ to survive.
+        D32(384, idr_dbg_state);       // 0=not tried, 1=entered, 2=ptr ok, 3=scanning, 4=ok, 0xEn=err
+        D32(388, idr_dbg_fcnt);        // frame counter from +0x28
+        D32(392, idr_dbg_ptr);         // first_ptr from +0xC0
+        D32(396, idr_dbg_size);        // idr_size from +0xDC
+        D32(400, idr_dbg_nals);        // NAL units found
+        D32(404, idr_dbg_dst);         // total AVCC output bytes
+        D32(408, idr_dbg_byte0);       // bytes 16-19 (SPS→PPS transition)
+        D32(412, idr_dbg_nal2type);    // NAL2 info
+        D32(416, idr_injected);        // 1 = success, 0 = not yet
 
         #undef D32
         hw_diag_len = HW_DIAG_SIZE;
@@ -1363,6 +1390,160 @@ static int capture_frame_h264(void)
                 return (int)dbg_size;
             }
             hdr[9] = (rd + 1) % 4;  // Invalid slot, skip it
+        }
+    }
+
+    // IDR injection: on first call, read IDR from ring buffer +0xC0 pointer.
+    // The data is in Annex B format (start codes 00 00 00 01 or 00 00 01)
+    // and must be converted to AVCC format (4-byte BE length prefix) for the bridge.
+    // Ring buffer struct at 0x8968: +0x28 = frame counter, +0xC0 = first-frame ptr,
+    // +0xDC = IDR size.
+    // Pre-condition canary (overwritten inside if-block if entered)
+    if (!idr_injected && recording_active && frame_data_buf) {
+        unsigned int fcnt = *(volatile unsigned int *)0x8990;  // +0x28: frame counter
+        idr_dbg_state = 1;  // entered
+        idr_dbg_fcnt = fcnt;
+        if (fcnt >= 1) {
+            unsigned int first_ptr = *(volatile unsigned int *)0x8A28;  // +0xC0
+            unsigned int idr_size  = *(volatile unsigned int *)0x8A44;  // +0xDC
+            // Use IDR size + 200 bytes for SPS/PPS overhead as scan limit
+            unsigned int scan_limit = (idr_size > 0 && idr_size < 60000)
+                                      ? idr_size + 200 : 55000;
+            if (scan_limit > SPY_BUF_SIZE) scan_limit = SPY_BUF_SIZE;
+            idr_dbg_ptr = first_ptr;
+            idr_dbg_size = idr_size;
+            if (first_ptr != 0 && first_ptr > 0x1000 && first_ptr < 0x80000000) {
+                unsigned char *src = (unsigned char *)first_ptr;
+                unsigned int dst_pos = 0;
+                unsigned int i = 0;
+                int got_vcl = 0;
+                unsigned int nal_count = 0;
+
+                idr_dbg_state = 2;  // ptr ok
+                // Capture bytes 24-27 in fcnt (scanner doesn't touch it)
+                // Should be 00 00 00 01 if PPS is 4 bytes
+                idr_dbg_fcnt = ((unsigned int)src[24] << 24) | ((unsigned int)src[25] << 16)
+                              | ((unsigned int)src[26] << 8) | src[27];
+                // Capture bytes 20-23 (PPS data area)
+                idr_dbg_byte0 = ((unsigned int)src[20] << 24) | ((unsigned int)src[21] << 16)
+                               | ((unsigned int)src[22] << 8) | src[23];
+
+                // Find first Annex B start code (3-byte 00 00 01 or 4-byte 00 00 00 01)
+                while (i + 3 < scan_limit) {
+                    if (src[i]==0 && src[i+1]==0 && src[i+2]==1) {
+                        i += 3;
+                        break;
+                    }
+                    if (src[i]==0 && src[i+1]==0 && src[i+2]==0 && (i+3) < scan_limit && src[i+3]==1) {
+                        i += 4;
+                        break;
+                    }
+                    i++;
+                }
+
+                idr_dbg_state = 3;  // scanning
+
+                // Process each NAL unit: convert start codes to AVCC length prefixes
+                while (i < scan_limit && !got_vcl) {
+                    unsigned int nal_start = i;
+                    unsigned int nal_end = scan_limit;
+                    unsigned int j, nal_len, nal_type;
+
+                    // Find next start code: check for both 00 00 01 and 00 00 00 01
+                    for (j = i + 1; j + 2 < scan_limit; j++) {
+                        if (src[j]==0 && src[j+1]==0 && src[j+2]==1) {
+                            // Found 00 00 01 — check if preceded by 00 (4-byte)
+                            nal_end = (j > 0 && src[j-1]==0) ? j - 1 : j;
+                            break;
+                        }
+                    }
+
+                    nal_len = nal_end - nal_start;
+                    if (nal_len < 1 || nal_len > 60000) { idr_dbg_state = 0xE1; break; }
+                    if (dst_pos + 4 + nal_len > SPY_BUF_SIZE) { idr_dbg_state = 0xE2; break; }
+
+                    // Write AVCC 4-byte big-endian length prefix
+                    frame_data_buf[dst_pos]     = (nal_len >> 24) & 0xFF;
+                    frame_data_buf[dst_pos + 1] = (nal_len >> 16) & 0xFF;
+                    frame_data_buf[dst_pos + 2] = (nal_len >> 8) & 0xFF;
+                    frame_data_buf[dst_pos + 3] = nal_len & 0xFF;
+                    memcpy(frame_data_buf + dst_pos + 4, src + nal_start, nal_len);
+                    dst_pos += 4 + nal_len;
+
+                    nal_type = src[nal_start] & 0x1F;
+                    nal_count++;
+                    // Store NAL debug: overwrite byte0/nal2type with final NAL info
+                    if (nal_count >= 2) {
+                        // bytes 28-31
+                        idr_dbg_byte0 = ((unsigned int)src[28] << 24) | ((unsigned int)src[29] << 16)
+                                       | ((unsigned int)src[30] << 8) | src[31];
+                        idr_dbg_nal2type = ((unsigned int)src[nal_start] << 24)
+                                         | ((nal_type & 0xFF) << 16)
+                                         | (((nal_len >> 8) & 0xFF) << 8)
+                                         | (nal_end == scan_limit ? 0xFF : 0x00);
+                    }
+                    if (nal_type == 5) got_vcl = 1;  // IDR found — stop
+
+                    // Advance past the start code we found
+                    if (nal_end < scan_limit) {
+                        j = nal_end;
+                        // Skip 00 00 01 or 00 00 00 01
+                        if (j + 3 < scan_limit && src[j]==0 && src[j+1]==0 && src[j+2]==0 && src[j+3]==1)
+                            i = j + 4;
+                        else if (j + 2 < scan_limit && src[j]==0 && src[j+1]==0 && src[j+2]==1)
+                            i = j + 3;
+                        else
+                            { idr_dbg_state = 0xE3; break; }  // bad start code
+                    } else {
+                        break;  // No more NAL units
+                    }
+                }
+
+                // Hybrid format: SPS/PPS use Annex B start codes, but IDR
+                // uses AVCC 4-byte BE length prefix. The scanner treated PPS
+                // as extending to scan_limit (including AVCC IDR data) since
+                // no Annex B start code follows PPS. Reset dst_pos and rebuild.
+                if (!got_vcl && nal_count >= 1 && dst_pos > 0) {
+                    unsigned int pps_end = 24;  // SC(0-3)+SPS(4-15)+SC(16-19)+PPS(20-23)
+                    if (pps_end + 4 < scan_limit) {
+                        unsigned int avcc_len = ((unsigned int)src[pps_end] << 24)
+                                              | ((unsigned int)src[pps_end+1] << 16)
+                                              | ((unsigned int)src[pps_end+2] << 8)
+                                              | src[pps_end+3];
+                        unsigned int idr_nal_pos = pps_end + 4;
+                        if (avcc_len > 0 && avcc_len < 60000
+                            && idr_nal_pos < scan_limit
+                            && (src[idr_nal_pos] & 0x1F) == 5) {
+                            // Send IDR NAL only (no SPS/PPS — bridge has them
+                            // from avcC init). Including in-band SPS would override
+                            // the avcC params and may cause decode pipeline issues.
+                            dst_pos = 0;
+                            // IDR: already AVCC at src+24, copy len+data
+                            memcpy(frame_data_buf + dst_pos, src + pps_end, 4 + avcc_len);
+                            dst_pos += 4 + avcc_len;
+                            nal_count = 1;
+                            got_vcl = 1;
+                        }
+                    }
+                }
+
+                idr_dbg_nals = nal_count;
+                idr_dbg_dst = dst_pos;
+
+                if (got_vcl && dst_pos > 0) {
+                    idr_dbg_state = 4;  // success
+                    idr_injected = 1;
+                    hw_jpeg_data = frame_data_buf;
+                    hw_jpeg_size = dst_pos;
+                    frame_width = 640;
+                    frame_height = 480;
+                    frame_format = WEBCAM_FMT_H264;
+                    return (int)dst_pos;
+                }
+                if (idr_dbg_state == 3) idr_dbg_state = 0xE4;  // scanner finished without IDR
+            } else {
+                idr_dbg_state = 0xE0;  // ptr invalid
+            }
         }
     }
 
@@ -1608,6 +1789,7 @@ static int webcam_start(int jpeg_quality)
     recording_active = 0;
     last_spy_cnt = 0;
     avi_sem_handle = 0;
+    idr_injected = 0;
 
     // Switch camera to video mode
     if (switch_to_video_mode() < 0) {
@@ -1761,6 +1943,7 @@ static int webcam_stop(void)
     last_cb_count_hwjpeg = 0;
     last_spy_cnt = 0;
     avi_sem_handle = 0;
+    idr_injected = 0;
 
     // Clean up spy buffer resources (semaphore + data buffer)
     if (frame_sem) {

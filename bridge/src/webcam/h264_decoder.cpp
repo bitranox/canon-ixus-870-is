@@ -186,10 +186,32 @@ bool H264Decoder::decode(const uint8_t* data, size_t size, RGBFrame& rgb_out) {
     impl_->pkt->data = const_cast<uint8_t*>(feed_data);
     impl_->pkt->size = static_cast<int>(feed_size);
 
-    int ret = avcodec_send_packet(impl_->ctx, impl_->pkt);
+    // FFmpeg H.264 decoder has a 1-frame pipeline delay: it accepts a packet
+    // via send_packet but doesn't produce output until the NEXT packet arrives.
+    // Fix: try to drain pending output BEFORE sending the new packet.
+    av_frame_unref(impl_->frame);
+    int ret = avcodec_receive_frame(impl_->ctx, impl_->frame);
+    if (ret == 0) {
+        // Got a pending frame from previous packet — send current packet
+        // for next time, then return this frame.
+        avcodec_send_packet(impl_->ctx, impl_->pkt);
+        goto have_frame;
+    }
+
+    // No pending output — send packet and try to receive
+    ret = avcodec_send_packet(impl_->ctx, impl_->pkt);
+
+    static int dbg_count = 0;
+    dbg_count++;
+    if (dbg_count <= 5) {
+        fprintf(stderr, "  [h264 dbg #%d] send_packet(%d bytes) = %d, nal=0x%02x\n",
+                dbg_count, impl_->pkt->size,  ret,
+                (impl_->pkt->size >= 5) ? impl_->pkt->data[4] : 0);
+    }
+
     if (ret < 0) {
         if (ret == AVERROR(EAGAIN)) {
-            // Decoder needs us to read output first — try receive then resend
+            // Input buffer full — drain output first, then resend
             av_frame_unref(impl_->frame);
             avcodec_receive_frame(impl_->ctx, impl_->frame);
             ret = avcodec_send_packet(impl_->ctx, impl_->pkt);
@@ -202,7 +224,16 @@ bool H264Decoder::decode(const uint8_t* data, size_t size, RGBFrame& rgb_out) {
         }
     }
 
+    av_frame_unref(impl_->frame);
     ret = avcodec_receive_frame(impl_->ctx, impl_->frame);
+
+    if (dbg_count <= 5) {
+        fprintf(stderr, "  [h264 dbg #%d] receive_frame = %d%s\n",
+                dbg_count, ret,
+                ret == AVERROR(EAGAIN) ? " (EAGAIN)" :
+                ret == 0 ? " (OK!)" : " (error)");
+    }
+
     if (ret < 0) {
         if (ret == AVERROR(EAGAIN)) {
             impl_->last_error = "Decoder needs more data";
@@ -213,6 +244,8 @@ bool H264Decoder::decode(const uint8_t* data, size_t size, RGBFrame& rgb_out) {
         }
         return false;
     }
+
+have_frame:
 
     // We have a decoded frame — convert YUV to RGB
     int src_w = impl_->frame->width;
