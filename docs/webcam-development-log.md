@@ -1460,6 +1460,55 @@ DIm4 = 0xFFFFFFFF            — data area + idr_off still shows 0xFF (DMA flush
 
 **Next step**: Need to capture `*(0x8DE4)` during msg 5 (when it holds the live data area pointer) and probe the IDR data at `*(0x8DE4) + 0x158AC`. The challenge is delivering this data to the bridge — debug frames sent during msg 5 context get corrupted before PTP polling reads them. Solution: store in statics during msg 5, read from msg 6 debug frame after msg5_done==1. But the msg5_done guard requires msg 5 to fire first, and the narrow magic-valid window may close before that happens. May need to remove the `idr_sent = 0` reset on magic failure to let the counter accumulate across valid polls.
 
+### v24 — IDR Location Discovery (2026-02-22)
+
+**Goal**: Find where IDR frames are actually written, since msg 5 never fires during webcam recording yet MOV files contain IDR data.
+
+**Investigation**: Decompiled `sub_FF92FE8C_MovieFrameGetter` (552 bytes at 0xFF92FE8C). This is the function called from msg 6 that returns encoded frame pointers from the ring buffer.
+
+**Critical finding in MovieFrameGetter** (idr_architecture_decompiled.txt:975):
+```c
+else if (*(int *)(iVar1 + 0x28) == 1) {   // Frame counter == 1 (FIRST frame)
+    uVar6 = *(uint *)(iVar1 + 0xc0);       // Special first-frame pointer
+}
+*param_1 = uVar6;                           // Return as frame pointer
+iVar9 = *(int *)(iVar1 + 0x70);            // Frame size
+```
+
+When the frame counter is 1 (first call), MovieFrameGetter returns the pointer from ring buffer **+0xC0** instead of the normal **+0x1C** read pointer. This IS the IDR/SPS data.
+
+**Debug probe**: Modified spy_idr_capture to read +0xC0 pointer and dump first 12 bytes. Results:
+
+```
+FPtr = 0x412C4720   ← First-frame pointer from +0xC0
+FSiz = 0x00040000   ← +0x70: buffer capacity (256KB), NOT actual frame size
+FCnt = 0x00000002   ← Frame counter already 2 (IDR already consumed)
+IOff = 0x000158AC   ← +0xD8: IDR offset in data area (MOV metadata)
+ISiz = 0x0000CFE8   ← +0xDC: IDR size = 53KB
+NAL0 = 0x01000000   ← Bytes 0-3: 00 00 00 01 (Annex B start code)
+NAL4 = 0x1FE04267   ← Bytes 4-7: 67 42 E0 1F (SPS NAL type 0x67!)
+NAL8 = 0xF68002DA   ← Bytes 8-11: DA 02 80 F6 (SPS data, matches hardcoded)
+```
+
+**Three discoveries**:
+
+1. **IDR data location**: Ring buffer +0xC0 (address 0x8A28) holds a pointer (0x412C4720) to the SPS+PPS+IDR bundle in **Annex B format** (start codes, not AVCC length-prefixed).
+
+2. **Format mismatch**: The first frame is Annex B (`00 00 00 01` start codes), while subsequent P-frames are AVCC format (`00 00 XX XX` length prefix). The SPS bytes `67 42 E0 1F DA 02 80 F6` match the hardcoded SPS in the bridge.
+
+3. **Race condition — IDR lost**: The IDR is returned by MovieFrameGetter on the first msg 6 call, spy_ring_write is called, but the webcam module's shared memory magic (0x52455753) likely isn't set yet. By the time PTP polling starts, only P-frames remain. Bridge output confirms: ALL 300+ frames are NAL type 0x61 (P-frame, type 1). Zero IDR frames received.
+
+**Bridge output confirms the problem**:
+```
+H.264 FAIL #1: 36804 bytes — NAL=0x61 (type=1, P-frame)
+H.264 FAIL #2: 37372 bytes — NAL=0x61 (type=1, P-frame)
+... (all 300+ frames are P-frames, decoder never syncs)
+```
+
+**Root cause**: The webcam module isn't ready when the first frame (IDR) arrives. The first frame is silently dropped by spy_ring_write's magic check. Once the module IS ready, only P-frames remain.
+
+**Fix approach**: Read IDR data directly from the +0xC0 pointer (0x412C4720) in the webcam module when it starts polling. The data persists at that address throughout recording. Send SPS+PPS+IDR as frame #0 before any P-frames.
+
 ## Future Ideas (Not Yet Implemented)
 
 ### Raw YUV Pipeline Streaming (640x480)

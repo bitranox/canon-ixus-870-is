@@ -8,6 +8,7 @@
 - **Commit after each bridge test** with a message that describes what was tested and what the result was.
 - **Use the debug frame protocol** (`spy_debug_reset/add/send`) in `movie_rec.c` for all camera→bridge diagnostic output. Do NOT inject debug data into H.264 frames. See [Debug Frame Protocol](docs/debug-frame-protocol.md) for API reference and payload format.
 - **No double indirection in movie_rec.c**: NEVER dereference a pointer read from another pointer (e.g. `*(*(0xFF93050C) + 0xC4)`). The ARM compiler generates code that crashes the camera. Use hardcoded addresses instead. The ring buffer struct is always at `0x8968` — see [v22b in dev log](docs/webcam-development-log.md) for the address table.
+- **USB hangs — restart bridge first**: If the bridge receives no data, restart it before assuming a camera crash. Some hangs are USB-level only and clearing the USB connection fixes them. Only do a battery pull if restarting the bridge doesn't help.
 
 ## Project Overview
 
@@ -52,6 +53,7 @@ Detailed reference documents (see `docs/` directory):
 - [Firmware Reverse Engineering](docs/firmware-reverse-engineering.md) — Ghidra project, memory map, ISP architecture, JPCORE pipeline, decompiled functions
 - [Webcam Development Log](docs/webcam-development-log.md) — implementation progress, test results, failed approaches, current state
 - [Debug Frame Protocol](docs/debug-frame-protocol.md) — camera-to-bridge debug channel, tagged key-value frames, SPSC queue
+- [Proven Facts](docs/proven-facts.md) — verified addresses, data formats, memory layout, known problems (no history, just facts)
 
 ## Development Environment (checked 2026-02-08)
 
