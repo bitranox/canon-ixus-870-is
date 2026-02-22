@@ -116,6 +116,7 @@ struct Options {
     bool flip_v = false;
     bool no_webcam = false;
     bool no_preview = false;
+    bool no_decode = false;
     bool verbose = false;
     int timeout_sec = 0;
 };
@@ -136,6 +137,7 @@ static void print_usage(const char* prog) {
         "  --flip-v            Flip vertically\n"
         "  --no-webcam         Skip virtual webcam creation\n"
         "  --no-preview        Skip preview window\n"
+        "  --no-decode         Skip H.264 decode (measure raw PTP throughput)\n"
         "  --verbose           Show per-frame statistics\n"
         "  --timeout N         Exit after N seconds (graceful shutdown)\n"
         "  --help              Show this help\n"
@@ -167,6 +169,8 @@ static Options parse_args(int argc, char* argv[]) {
             opts.no_webcam = true;
         } else if (arg == "--no-preview") {
             opts.no_preview = true;
+        } else if (arg == "--no-decode") {
+            opts.no_decode = true;
         } else if (arg == "--verbose") {
             opts.verbose = true;
         } else if (arg == "--timeout" && i + 1 < argc) {
@@ -279,6 +283,8 @@ int main(int argc, char* argv[]) {
         fprintf(stderr, "WARNING: start_webcam returned false: %s\n", client.get_last_error().c_str());
         fprintf(stderr, "Will try to get frames anyway (module may auto-load).\n");
     }
+    if (opts.no_decode)
+        printf("\n*** NO-DECODE MODE: measuring raw PTP throughput (no H.264 decode, no IDR re-injection) ***\n");
     if (opts.timeout_sec > 0)
         printf("\nStreaming for %d seconds. Press Ctrl+C to stop early.\n\n", opts.timeout_sec);
     else
@@ -541,6 +547,57 @@ int main(int argc, char* argv[]) {
                 }
             }
             prev_data_hash = h;
+        }
+
+        // --no-decode: skip all decode/display, just count raw PTP throughput
+        if (opts.no_decode) {
+            frames_received++;
+            total_bytes += static_cast<int>(mjpeg.data.size());
+            if (frames_received == 1) {
+                const char* fmt_name = "JPEG";
+                if (mjpeg.format == ptp::FRAME_FMT_UYVY) fmt_name = "UYVY";
+                else if (mjpeg.format == ptp::FRAME_FMT_H264) fmt_name = "H.264";
+                printf("First frame: %ux%u, %zu bytes, format=%s (NO DECODE)\n",
+                       mjpeg.width, mjpeg.height, mjpeg.data.size(), fmt_name);
+            }
+            // AVCC header validity check (no decode, just inspect)
+            if (mjpeg.format == ptp::FRAME_FMT_H264 && mjpeg.data.size() >= 5) {
+                uint8_t nal_type = mjpeg.data[4] & 0x1F;
+                bool forbidden = (mjpeg.data[4] & 0x80) != 0;
+                uint32_t avcc_len = ((uint32_t)mjpeg.data[0] << 24) |
+                                    ((uint32_t)mjpeg.data[1] << 16) |
+                                    ((uint32_t)mjpeg.data[2] << 8) |
+                                    (uint32_t)mjpeg.data[3];
+                bool valid_avcc = !forbidden && (nal_type == 1 || nal_type == 5 || nal_type == 6)
+                                  && avcc_len > 0 && avcc_len <= mjpeg.data.size();
+                static int valid_count = 0, invalid_count = 0;
+                if (valid_avcc) valid_count++; else invalid_count++;
+                if (frames_received <= 10 || frames_received % 50 == 0) {
+                    fprintf(stderr, "  [no-decode #%d] %zu bytes, NAL=%d, avcc_len=%u, %s  (valid:%d invalid:%d)\n",
+                            frames_received, mjpeg.data.size(), nal_type, avcc_len,
+                            valid_avcc ? "OK" : "BAD", valid_count, invalid_count);
+                }
+            }
+
+            // Print stats periodically
+            auto now = std::chrono::steady_clock::now();
+            if (now - last_stats >= stats_interval) {
+                auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_stats).count();
+                float fps = (elapsed_ms > 0) ? (frames_received * 1000.0f / elapsed_ms) : 0;
+                float kbps = (elapsed_ms > 0) ? (total_bytes * 8.0f / elapsed_ms) : 0;
+                printf("\r[NO-DECODE] FPS: %.1f | Recv: %d | Drop: %d | Skip: %d | %.0f kbps | Uniq: %d Dup: %d    \n",
+                       fps, frames_received, frames_dropped, frames_skipped, kbps,
+                       unique_frames, duplicate_frames);
+                total_received += frames_received;
+                total_dropped += frames_dropped;
+                total_skipped += frames_skipped;
+                frames_received = 0;
+                frames_dropped = 0;
+                frames_skipped = 0;
+                total_bytes = 0;
+                last_stats = now;
+            }
+            continue;
         }
 
         // Decode frame (JPEG, raw UYVY, or H.264)

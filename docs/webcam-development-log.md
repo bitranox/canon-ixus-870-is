@@ -1859,3 +1859,59 @@ Reverted to plain msleep(10). The 80% success rate at 22fps is the best achievab
 - ~338 successfully decoded frames in 20 seconds (~17fps decoded)
 - Camera stable, no stalls
 - Bridge handles the 20% failures via fast retry + occasional IDR re-injection
+
+## v25 — Hook Position Experiments & No-Decode Throughput Test (2026-02-22)
+
+### Hook position experiments
+
+Tested moving spy_ring_write to later points in `sub_FF85D98C_my` to find a position where the CPU cache is already warm (avoiding the msleep(10) delay):
+
+| Position | After | Before | Frames | Drops | FPS | Cache valid | Notes |
+|----------|-------|--------|--------|-------|-----|-------------|-------|
+| Early (baseline) | sub_FF92FE8C | loc_FF85DA24 | 445 | 107 | 22 | ~80% | With msleep(10) |
+| Late | set_quality | loc_FF85DCBC | 96 | 4 | 5 | 96% | No msleep needed |
+| Mid | sub_FF8EDBE0 | sub_FF8274B4 | 72 | 13 | 3.5 | ~82% | No msleep |
+
+**Late hook** (after all firmware processing including semaphore wait): 96% cache validity without any msleep, confirming that the AVI writer task warms cache lines during `sub_FF8274B4` (semaphore wait, ~200ms). But ~5fps because the hook fires 200ms after encoding.
+
+**Mid hook** (after AVI writer submit, before semaphore wait): Worse than early — confirms `sub_FF8EDBE0` does NOT warm the cache. It just submits work to the AVI writer task (separate DryOS task). Cache warming happens during the semaphore wait as the writer task reads frame data.
+
+**Conclusion**: The early hook + msleep(10) remains best. Later hooks trade latency for cache validity, but the latency cost exceeds the msleep(10) delay.
+
+### No-decode throughput test — isolating the bottleneck
+
+Added `--no-decode` flag to bridge: receives frames via PTP but skips ALL H.264 decode, IDR re-injection, and display. Measures raw PTP transport throughput.
+
+**Results** (20 second test, early hook + msleep(10)):
+- **120 frames received, 0 drops, 0 skips = 6 FPS**
+- **100% AVCC header validity** (0 invalid frames)
+- **120 unique frames, 0 duplicates**
+- Camera produced exactly 120 frames (cam#1 through cam#120, no gaps)
+
+**Key finding: The bridge decode is NOT the bottleneck.**
+
+Even with zero decode overhead, only ~6 FPS is achievable. The bottleneck is entirely camera-side: PTP task scheduling + msleep(10) polling takes ~165ms per frame.
+
+Breakdown per PTP request cycle (~165ms):
+- msleep(10) polling × several iterations = ~50-100ms (DryOS msleep(1) ≈ 10ms)
+- PTP USB transfer of ~40KB = ~10ms
+- Camera PTP task scheduling overhead = ~50-100ms
+
+**Comparison**: With decode enabled, we got 445 frames (22 FPS) because 80% of those were "fast failures" (invalid AVCC from stale cache → 0 bytes → immediate retry). The bridge made ~27 PTP requests/sec, of which ~22 returned valid data. Without decode, every frame succeeds (no fast-fail retries), so we only get ~6 successful frames/sec.
+
+**This means the 22 FPS result with decode was actually driven by the high PTP request rate from fast failures — the msleep(10) + fast-fail pattern is performing optimally.**
+
+### Remaining bottleneck: camera PTP task latency
+
+The ~165ms per successful frame breaks down as:
+1. PTP request arrives → DryOS schedules PTP task
+2. webcam.c `capture_frame_h264()` runs:
+   - Poll seqlock with msleep(1) delays until new frame detected
+   - msleep(10) cache eviction delay
+   - memcpy ~40KB from ring buffer
+3. PTP response sent back to bridge
+
+To go beyond 6 FPS for successfully decoded frames, we need to reduce the camera-side cycle time. Options to explore:
+- Remove or reduce msleep(10) and accept cache misses (current "fast fail" approach already does this effectively)
+- Find a way to invalidate CPU cache lines directly (no known DryOS API)
+- Use uncached memory alias (0x40000000 | addr) for reads — bypasses cache entirely but may be slower for large memcpy
