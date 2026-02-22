@@ -1694,3 +1694,58 @@ If the sequence counter changes during memcpy, the data is stale — retry with 
 - **All frames are IDR** (NAL 0x65, 45384 bytes each) — camera appears to send identical IDR frames since no scene change occurs in webcam mode
 
 The seqlock completely eliminated the ring buffer race condition. Every frame produced by the camera was successfully received and decoded by the bridge.
+
+## Cache Coherency Investigation (2026-02-22)
+
+### Problem: Static preview (all frames identical)
+
+Despite 601 frames at 30fps, the preview window showed a static image. Frame data uniqueness test (FNV-1a hash of first 256 bytes) confirmed: **1 unique frame, 600 duplicates**. All 601 frames contain byte-for-byte identical IDR data.
+
+**Root cause**: DMA cache coherency. JPCORE DMA writes H.264 frame data to physical memory, bypassing the CPU data cache. The CPU's L1 data cache retains stale data from the first frame. When the PTP task does memcpy from the ring buffer, it reads from cache (stale IDR) instead of physical memory (fresh frame data).
+
+The old polling version (pre-seqlock) worked because msleep delays between frames allowed natural cache line eviction by other DryOS tasks. The semaphore-based approach wakes the PTP task immediately, before cache eviction occurs.
+
+### Cache invalidation attempts
+
+| Approach | Unique frames | Result |
+|----------|--------------|--------|
+| No invalidation (semaphore) | 1/601 | All identical — stale cache |
+| MCR p15 c7,c6,1 in webcam.c (Thumb) | — | Build error: MCR is ARM-only |
+| `__attribute__((target("arm")))` | — | GCC too old, not supported |
+| Naked BX PC per-line invalidation (webcam.c) | 1 | Crash after 1 frame |
+| dcache_clean_all + invalidate_all (webcam.c) | 20 | Recording stalled — DryOS starvation |
+| Invalidate-only, no clean (webcam.c) | 1 | Crash — dirty cache lines lost |
+| Per-line MCR in spy_ring_write (movie_rec.c) | 28 | Recording stalled after ~1s — DryOS starvation |
+
+**Key finding**: Any cache invalidation causes DryOS starvation. The recording pipeline's AVI write semaphore (1000ms timeout) fails when cache operations consume too much CPU time, stalling recording after 20-28 frames.
+
+### Polling approach (remove semaphore, keep seqlock)
+
+Replaced TakeSemaphore with msleep(1) polling loop. Polls hdr[3] (seqlock counter) up to 100 times, sleeping 1ms between polls. When seq changes and is even (write complete), memcpy the frame data.
+
+Removed GiveSemaphore from movie_rec.c — the seqlock counter is sufficient for frame detection.
+
+**Test result (2026-02-22)**:
+```
+=== SESSION SUMMARY ===
+  Received: 33 frames
+  Dropped:  550 (decode failures)
+  Unique data: 33 frames
+  Duplicate data: 0 frames (identical to previous)
+=======================
+```
+
+- **33 unique frames** (vs 1 before) — cache partially evicted during msleep(1) delays
+- **0 duplicates** — every received frame has different data (proper IDR + P-frame mix)
+- **550 decode failures** — most frames still have corrupted data from partially stale cache lines
+- **Camera recorded full 20 seconds without stalling** — no DryOS starvation
+- FPS: ~4-5 (low because most PTP responses return corrupted data)
+
+**Analysis**: msleep(1) allows SOME cache lines to be evicted, but a 40KB frame spans ~1250 cache lines (32 bytes each). Natural eviction during 1ms only flushes a fraction of them. The first 256 bytes may be fresh (enough to pass uniqueness hash) while later bytes remain stale, corrupting the H.264 bitstream.
+
+### Next step: CPU memcpy in spy_ring_write
+
+Instead of passing the ring buffer pointer to webcam.c, have spy_ring_write (running in movie_record_task context) do a CPU memcpy to a shared buffer. This populates the CPU cache with correct data because:
+1. By the time spy_ring_write runs, firmware has already ensured cache coherency for sub_FF92FE8C's output
+2. CPU memcpy reads correct ring buffer data and writes to the shared buffer through cache
+3. When webcam.c reads the shared buffer, it gets correct cached data (written by CPU, not DMA)

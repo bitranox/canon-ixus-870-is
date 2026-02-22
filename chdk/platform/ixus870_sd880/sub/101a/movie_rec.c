@@ -1,8 +1,5 @@
 #include "conf.h"
 
-// Firmware stubs used by spy_ring_write
-extern void _GiveSemaphore(int sem);
-
 void change_video_tables(__attribute__ ((unused))int a, __attribute__ ((unused))int b) {}
 
 
@@ -29,7 +26,6 @@ void  set_quality(int *x){ // -17 highest; +12 lowest
 static void __attribute__((used,noinline)) spy_ring_write(unsigned char *ptr, unsigned int size)
 {
     volatile unsigned int *hdr = (volatile unsigned int *)0x000FF000;
-    unsigned int sem_handle;
 
     if (hdr[0] != 0x52455753) return;  // Not initialized by webcam.c
 
@@ -37,11 +33,6 @@ static void __attribute__((used,noinline)) spy_ring_write(unsigned char *ptr, un
     hdr[1] = (unsigned int)ptr;        // Source pointer (ring buffer address)
     hdr[2] = size;                     // Frame data size
     hdr[3]++;                          // Seq even = write complete
-
-    sem_handle = hdr[5];
-    if (sem_handle != 0) {
-        _GiveSemaphore(sem_handle);
-    }
 }
 
 

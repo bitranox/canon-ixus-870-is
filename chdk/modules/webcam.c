@@ -4,8 +4,10 @@
 // memory spy buffer and makes them available over PTP to a PC-side bridge.
 //
 // movie_rec.c's spy_ring_write() stores each frame's ring buffer pointer
-// and signals a semaphore.  capture_frame_h264() blocks on the semaphore,
-// copies the frame data, and parses AVCC NAL units.
+// and size using a seqlock protocol.  capture_frame_h264() polls the
+// seqlock counter with msleep(1) delays, which allows natural CPU cache
+// eviction by other DryOS tasks — solving the DMA cache coherency issue
+// without explicit cache invalidation (which caused DryOS starvation).
 //
 // On the first capture call, the IDR keyframe is read directly from the
 // ring buffer's +0xC0 pointer (which persists throughout recording) and
@@ -20,7 +22,6 @@
 #include "callfunc.h"
 #include "webcam.h"
 #include "shutdown.h"
-#include "semaphore.h"
 
 // Movie recording start/stop via CtrlSrv event system
 // UIFS_StartMovieRecord posts event 0x9A1 to the control server queue.
@@ -54,7 +55,6 @@ static int webcam_stop(void);              // forward declaration for use in web
 
 // Spy buffer: frame data area (H.264 data copied from ring buffer)
 static unsigned char *frame_data_buf = NULL;
-static int frame_sem = 0;                  // DryOS binary semaphore for frame signaling
 #define SPY_BUF_SIZE 65536                 // 64 KB — enough for any H.264 frame
 
 // IDR injection: the first H.264 frame (IDR) is lost due to a race condition
@@ -74,11 +74,11 @@ static int idr_injected = 0;
 // ============================================================
 #define WEBCAM_SPY_ADDR    ((volatile unsigned int *)0x000FF000)
 // spy[0] = magic (0x52455753 = active, set by webcam.c)
-// spy[1] = data_ptr (frame buffer, malloc'd by webcam.c)
-// spy[2] = frame_size (actual bytes copied, set by movie_rec.c)
-// spy[3] = frame_cnt (monotonic counter, set by movie_rec.c LAST)
-// spy[4] = max_size (buffer capacity, set by webcam.c)
-// spy[5] = sem_handle (DryOS semaphore, set by webcam.c)
+// spy[1] = src_ptr (ring buffer pointer, set by movie_rec.c)
+// spy[2] = size    (frame data size, set by movie_rec.c)
+// spy[3] = seq     (seqlock counter: odd=writing, even=stable)
+// spy[4] = (unused)
+// spy[5] = (unused)
 
 // ============================================================
 // H.264 frame capture from recording spy buffer
@@ -86,8 +86,14 @@ static int idr_injected = 0;
 
 // Capture an H.264 encoded frame via pointer pass-through.
 // movie_rec.c's spy_ring_write() stores the ring buffer pointer and size
-// in the spy header, then signals frame_sem.  We block on the semaphore
-// (max 100ms), then memcpy from the ring buffer pointer to frame_data_buf.
+// in the spy header using a seqlock protocol.  We poll the seqlock counter
+// with msleep(1) delays (max 100ms total), then memcpy from the ring
+// buffer pointer to frame_data_buf.
+//
+// The msleep(1) polling approach solves DMA cache coherency: JPCORE DMA
+// writes H.264 data to physical memory bypassing the CPU cache.  The 1ms
+// delays allow other DryOS tasks to run and naturally evict stale cache
+// lines, so memcpy reads fresh DMA data without explicit invalidation.
 //
 // The data is H.264 NAL units in AVCC format (4-byte big-endian
 // length prefix, as used in MOV containers).
@@ -97,9 +103,8 @@ static int capture_frame_h264(void)
 {
     volatile unsigned int *hdr = WEBCAM_SPY_ADDR;
     unsigned int size;
-    int sem_ret;
 
-    if (!recording_active || !frame_data_buf || !frame_sem) return 0;
+    if (!recording_active || !frame_data_buf) return 0;
     if (hdr[0] != 0x52455753) return 0;
 
     // IDR injection: on first call, read IDR from ring buffer +0xC0 pointer.
@@ -215,37 +220,44 @@ static int capture_frame_h264(void)
         }
     }
 
-    // Block until movie_rec.c signals a new frame (max 100ms).
-    // spy_ring_write() stores ptr+size and calls GiveSemaphore(frame_sem).
-    sem_ret = TakeSemaphore(frame_sem, 100);
-    if (sem_ret != 0) return 0;  // Timeout — no frame available
-
-    // Seqlock copy: read sequence before memcpy, re-read after.
-    // If sequence changed during copy, the ring buffer was overwritten
-    // by a new frame — data is stale, retry with the new pointer.
-    // Up to 3 attempts to get a consistent copy.
+    // Poll for new frame with seqlock consistency check (max ~100ms).
+    // msleep(1) between attempts allows other DryOS tasks to run and
+    // naturally evict CPU cache lines containing stale DMA data.
+    // This solves the cache coherency issue without explicit invalidation.
     {
-        int attempt;
-        for (attempt = 0; attempt < 3; attempt++) {
+        static unsigned int last_seq = 0;
+        int polls;
+
+        for (polls = 0; polls < 100; polls++) {
             unsigned int seq_before, seq_after;
             unsigned char *src_ptr;
 
             seq_before = hdr[3];
-            // If seq is odd, a write is in progress — spin briefly
-            if (seq_before & 1) continue;
+
+            // Skip if write in progress (odd) or no new data (unchanged)
+            if ((seq_before & 1) || seq_before == last_seq) {
+                msleep(1);
+                continue;
+            }
 
             src_ptr = (unsigned char *)hdr[1];
             size = hdr[2];
-            if (!src_ptr || size == 0) return 0;
+            if (!src_ptr || size == 0) {
+                msleep(1);
+                continue;
+            }
             if (size > SPY_BUF_SIZE) size = SPY_BUF_SIZE;
 
             memcpy(frame_data_buf, src_ptr, size);
 
             seq_after = hdr[3];
-            if (seq_before == seq_after) break;  // Consistent copy
-            // Sequence changed — data was overwritten during copy, retry
+            if (seq_before == seq_after) {
+                last_seq = seq_before;
+                break;  // Consistent copy
+            }
+            // Seq changed during copy — frame overwritten, retry
         }
-        if (attempt >= 3) return 0;  // All attempts failed
+        if (polls >= 100) return 0;  // Timeout
     }
 
     // Parse AVCC NAL units to determine actual H.264 frame size.
@@ -394,14 +406,9 @@ static int webcam_start(int jpeg_quality)
     // Wait for video pipeline to stabilize before starting recording.
     msleep(500);
 
-    // Allocate spy buffer data area and create frame delivery semaphore.
-    // movie_rec.c's spy_ring_write will memcpy frame data here and signal
-    // the semaphore, so capture_frame_h264 can block instead of polling.
+    // Allocate spy buffer data area for frame capture.
     if (!frame_data_buf) {
         frame_data_buf = malloc(SPY_BUF_SIZE);
-    }
-    if (frame_data_buf && !frame_sem) {
-        frame_sem = CreateBinarySemaphore("WebcamFrame", 0);
     }
 
     // Initialize shared spy buffer header (must be done BEFORE starting
@@ -410,7 +417,6 @@ static int webcam_start(int jpeg_quality)
         volatile unsigned int *spy = WEBCAM_SPY_ADDR;
         int si;
         for (si = 0; si < 16; si++) spy[si] = 0;
-        spy[5] = (unsigned int)frame_sem;
         spy[0] = 0x52455753;                          // Magic (enable LAST)
     }
 
@@ -474,11 +480,7 @@ static int webcam_stop(void)
 
     idr_injected = 0;
 
-    // Clean up spy buffer resources (semaphore + data buffer)
-    if (frame_sem) {
-        DeleteSemaphore(frame_sem);
-        frame_sem = 0;
-    }
+    // Clean up spy buffer resources
     if (frame_data_buf) {
         free(frame_data_buf);
         frame_data_buf = NULL;
