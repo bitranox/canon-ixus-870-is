@@ -1932,6 +1932,23 @@ The first no-decode test (120 frames, 6 FPS) was run with the **wrong firmware**
 - Cache invalidation MCR instructions — crashes/stalls recording pipeline (tested v24)
 - Memcpy inside spy_ring_write — reads zeros, stalls pipeline (tested v24)
 
+### v25b — Uncached memory read retry (2026-02-22)
+
+Re-tested uncached memory alias (`src_ptr | 0x40000000`) in webcam.c memcpy, with msleep(10) removed (no cache eviction needed when bypassing cache).
+
+**Results** (20 second test, no-decode mode):
+- **58 frames received, 534 drops = ~2.9 FPS**
+- **100% AVCC header validity** — all 58 frames had correct data
+- **Camera stable** — no stall, no recording interruption
+
+**Comparison with previous uncached attempt (v24)**: Earlier test saw recording stall after ~5 seconds. This time the camera ran the full 20 seconds. The difference may be due to the seqlock protocol (no contention with spy_ring_write) and the early hook position.
+
+**Why it's slower than msleep(10)**: The uncached 40KB memcpy through the ARM bus takes much longer than a cached memcpy. The extra bus time per frame exceeds the 10ms sleep it replaces. With msleep(10): ~27 PTP req/sec, 80% valid = 420 frames. With uncached: ~30 PTP req/sec but each takes much longer, only 58 valid.
+
+**Conclusion**: Uncached reads are now stable (no crash) but too slow. The msleep(10) + cached memcpy approach remains optimal.
+
+### Remaining options
+
 Unexplored options:
 - DMA-to-DMA copy — would bypass cache but no known DryOS DMA copy API
 - Reduce PTP task scheduling overhead (unlikely — DryOS internal)
