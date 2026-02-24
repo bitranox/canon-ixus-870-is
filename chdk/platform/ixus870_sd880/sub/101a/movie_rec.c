@@ -8,6 +8,99 @@ void  set_quality(int *x){ // -17 highest; +12 lowest
 }
 
 
+// ============================================================
+// Debug frame queue (lock-free SPSC ring buffer)
+// Producer: movie_rec.c (spy_debug_* API)
+// Consumer: webcam.c (capture_frame_h264 reads slots)
+// ============================================================
+#define DBG_SLOT_SIZE   512
+#define DBG_QUEUE_DEPTH 4
+#define DBG_QUEUE_BASE  0x000FF040
+
+static unsigned char dbg_build_buf[DBG_SLOT_SIZE];
+static unsigned int  dbg_build_len = 0;
+static unsigned int  dbg_seq = 0;
+
+static void spy_debug_reset(void)
+{
+    dbg_build_buf[0]='D'; dbg_build_buf[1]='B';
+    dbg_build_buf[2]='G'; dbg_build_buf[3]='!';
+    *(unsigned int *)(dbg_build_buf + 4) = dbg_seq++;
+    *(unsigned short *)(dbg_build_buf + 8) = 0;
+    dbg_build_buf[10] = 0; dbg_build_buf[11] = 0;
+    dbg_build_len = 12;
+}
+
+static void spy_debug_add(char t0, char t1, char t2, char t3, unsigned int value)
+{
+    if (dbg_build_len + 8 > DBG_SLOT_SIZE - 4) return;
+    dbg_build_buf[dbg_build_len]   = t0;
+    dbg_build_buf[dbg_build_len+1] = t1;
+    dbg_build_buf[dbg_build_len+2] = t2;
+    dbg_build_buf[dbg_build_len+3] = t3;
+    *(unsigned int *)(dbg_build_buf + dbg_build_len + 4) = value;
+    dbg_build_len += 8;
+    (*(unsigned short *)(dbg_build_buf + 8))++;
+}
+
+static void spy_debug_send(void)
+{
+    volatile unsigned int *hdr = (volatile unsigned int *)0x000FF000;
+    unsigned int wr = hdr[8];
+    unsigned int rd = hdr[9];
+    unsigned int next_wr = (wr + 1) % DBG_QUEUE_DEPTH;
+    unsigned int i;
+    volatile unsigned char *slot;
+
+    if (next_wr == rd) return;
+
+    slot = (volatile unsigned char *)(DBG_QUEUE_BASE + wr * DBG_SLOT_SIZE);
+    *(volatile unsigned short *)slot = (unsigned short)dbg_build_len;
+    slot[2] = 0; slot[3] = 0;
+    for (i = 0; i < dbg_build_len; i++)
+        slot[4 + i] = dbg_build_buf[i];
+
+    // ARM drain write buffer before advancing index
+    asm volatile("mcr p15, 0, %0, c7, c10, 4" : : "r"(0));
+    hdr[8] = next_wr;
+}
+
+// Capture sub_FF9300B4 parameters during normal operation.
+// Called from assembly right before sub_FF9300B4 at loc_FF85DC84.
+// R0 = frame_ptr [SP,#0x34], R1 = sub_FF8EDBE0 output [SP,#0x3C].
+// Sends one debug frame on msg 6 calls 1-3 only.
+static int spy_rb_free_count = 0;
+
+static void __attribute__((used,noinline)) spy_capture_free_params(
+    unsigned int frame_ptr, unsigned int edbe0_out,
+    unsigned int sp30_bufsz, unsigned int sp28_val)
+{
+    volatile unsigned int *hdr = (volatile unsigned int *)0x000FF000;
+    if (hdr[0] != 0x52455753) { spy_rb_free_count = 0; return; }
+
+    spy_rb_free_count++;
+    if (spy_rb_free_count > 3) return;
+
+    // Also read ring buffer +0x1C (read ptr) and +0x148/+0x150 (free/used counts)
+    unsigned int rb_read_ptr = *(volatile unsigned int *)0x8984;   // 0x8968 + 0x1C
+    unsigned int rb_free_cnt = *(volatile unsigned int *)0x8AB0;   // 0x8968 + 0x148
+    unsigned int rb_used_cnt = *(volatile unsigned int *)0x8AB8;   // 0x8968 + 0x150
+    unsigned int rb_data_off = *(volatile unsigned int *)0x8A3C;   // 0x8968 + 0xD4
+
+    spy_debug_reset();
+    spy_debug_add('S','r','c','_', 0x46524545);  // "FREE"
+    spy_debug_add('F','r','N','o', spy_rb_free_count);
+    spy_debug_add('F','P','t','r', frame_ptr);     // R0 to sub_FF9300B4
+    spy_debug_add('E','D','o','t', edbe0_out);     // R1 to sub_FF9300B4 ([SP,#0x3C])
+    spy_debug_add('B','u','f','S', sp30_bufsz);    // [SP,#0x30] = 0x40000?
+    spy_debug_add('S','2','8','v', sp28_val);      // [SP,#0x28]
+    spy_debug_add('R','d','P','t', rb_read_ptr);   // ring buffer read pointer
+    spy_debug_add('F','r','C','t', rb_free_cnt);   // ring buffer free count
+    spy_debug_add('U','s','C','t', rb_used_cnt);   // ring buffer used count
+    spy_debug_add('D','O','f','f', rb_data_off);   // ring buffer data offset
+    spy_debug_send();
+}
+
 // Invalidate CPU data cache lines for a memory range.
 // JPCORE DMA writes H.264 data to physical memory bypassing the CPU cache.
 // Without invalidation, CPU reads return stale cached data.
@@ -37,7 +130,7 @@ static int __attribute__((used,noinline)) spy_take_sem_short(int sem, int timeou
     int (*real_take_sem)(int, int) = (int (*)(int, int))0xFF8274B4;
 
     if (hdr[0] == 0x52455753) {
-        // Webcam active: use short timeout
+        // Webcam active: use 50ms timeout to minimize SD write blocking
         int result = real_take_sem(sem, 50);
         if (result == 9) {
             // Timeout — return success so recording pipeline continues
@@ -400,6 +493,12 @@ void __attribute__((naked,noinline)) sub_FF85D98C_my(){
  "loc_FF85DC84:\n"
                  "MOV     R0, #0\n"
                  "BL      sub_FF8EDC88\n"
+                 // Debug: capture sub_FF9300B4 params before calling it
+                 "LDR     R0, [SP,#0x34]\n"    // frame_ptr
+                 "LDR     R1, [SP,#0x3C]\n"    // sub_FF8EDBE0 output
+                 "LDR     R2, [SP,#0x30]\n"    // buffer size
+                 "LDR     R3, [SP,#0x28]\n"    // SP+0x28 value
+                 "BL      spy_capture_free_params\n"
                  "LDR     R0, [SP,#0x34]\n"
                  "LDR     R1, [SP,#0x3C]\n"
                  "BL      sub_FF9300B4\n"

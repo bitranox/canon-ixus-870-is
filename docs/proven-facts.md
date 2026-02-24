@@ -77,6 +77,9 @@ The ring buffer struct is always at RAM address 0x8968. Confirmed by reading
 | 0xFF8EDDFC | FUN_ff8eddfc | 560 | First frame encode (JPCORE pipeline setup) | msg5_functions_decompiled.txt |
 | 0xFF85DD14 | (callback stub) | ~4 | No-op callback at +0xA0 (set by msg 11) | Ghidra, callback_usage_decompiled.txt |
 | 0xFF8C3BFC | RecPipelineSetup | | Recording pipeline initialization | movie_rec.c asm, msg5 decompilation |
+| 0xFF8EDBE0 | sub_FF8EDBE0 | | Async SD card write submit; writes actual frame size to [SP,#0x3C] | Debug probe: EDot matches frame size |
+| 0xFF8EDC88 | sub_FF8EDC88 | | SD write cleanup; called with arg 1 (first chunk) and 0 (final) | Decompilation, msg 6 flow |
+| 0xFF9300B4 | sub_FF9300B4 | | Ring buffer slot free: advances +0x1C read ptr by param_2 bytes | Debug probe + decompilation |
 
 ## Message Flow (movie_record_task)
 
@@ -128,6 +131,18 @@ Our patch accepts STATE 3 or 4 (original firmware only accepts 4).
 ### 5. Camera crashes are often USB-level, not code-level
 **Evidence**: Same code (exact commit 08aba0d) crashes on one run, works after battery pull. Restarting the bridge (without battery pull) sometimes clears USB hangs.
 **Implication**: Not all crashes indicate code bugs. Try bridge restart first, then battery pull.
+
+### 6. SD write pipeline parameters (sub_FF9300B4)
+**Evidence**: Debug probe at loc_FF85DC84 captured sub_FF9300B4's actual parameters:
+- `[SP,#0x34]` (R0) = frame pointer from ring buffer (matches +0x1C read pointer)
+- `[SP,#0x3C]` (R1) = actual frame size written by sub_FF8EDBE0 (e.g. 0xB000=45056 for IDR, 0x92F8=37624 for P-frame)
+- `[SP,#0x30]` = always 0x40000 (256KB buffer capacity from MovieFrameGetter, NOT frame size)
+- `+0xD4` data offset increments by `[SP,#0x3C]` each frame (cumulative byte counter)
+**Implication**: To call sub_FF9300B4 without sub_FF8EDBE0, we need the actual frame size. This matches the AVCC 4-byte length prefix + 4. Previous skip attempts failed because sub_FF8EDC88(0) was not called before sub_FF9300B4.
+
+### 7. TakeSemaphore timeout sensitivity
+**Evidence**: 50ms timeout → 347 decoded frames, stable. 1ms timeout → 1 frame then all gf_rc=-1.
+**Cause**: 1ms is too short — sub_FF8EDBE0 hasn't started the async write, so returning fake success while the DMA state is inconsistent corrupts the pipeline.
 
 ## Current Webcam Data Flow
 

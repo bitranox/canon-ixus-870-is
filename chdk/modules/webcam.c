@@ -106,6 +106,31 @@ static int capture_frame_h264(void)
     if (!recording_active || !frame_data_buf) return 0;
     if (hdr[0] != 0x52455753) return 0;
 
+    // Check debug queue (lock-free SPSC: we read hdr[8]=write_idx, we own hdr[9]=read_idx)
+    {
+        unsigned int wr = hdr[8];
+        unsigned int rd = hdr[9];
+        if (wr != rd && wr < 4 && rd < 4) {
+            volatile unsigned char *slot =
+                (volatile unsigned char *)(0x000FF040 + rd * 512);
+            unsigned int dbg_size = *(volatile unsigned short *)slot;
+            if (dbg_size >= 12 && dbg_size <= 508) {
+                unsigned int i;
+                for (i = 0; i < dbg_size; i++)
+                    frame_data_buf[i] = slot[4 + i];
+
+                hw_jpeg_data = frame_data_buf;
+                hw_jpeg_size = dbg_size;
+                frame_width = 640;
+                frame_height = 480;
+                frame_format = WEBCAM_FMT_DEBUG;
+                hdr[9] = (rd + 1) % 4;
+                return (int)dbg_size;
+            }
+            hdr[9] = (rd + 1) % 4;  // Invalid slot, skip
+        }
+    }
+
     // IDR injection: on first call, read IDR from ring buffer +0xC0 pointer.
     // The data is in hybrid format (Annex B start codes for SPS/PPS, then AVCC
     // length prefix for IDR NAL). We extract the IDR NAL in AVCC format.
@@ -516,7 +541,7 @@ static int webcam_get_frame(webcam_frame_t *frame)
     frame->width = frame_width;
     frame->height = frame_height;
     frame->frame_num = frame_count;
-    frame->format = WEBCAM_FMT_H264;
+    frame->format = frame_format;
 
     return 0;
 }
