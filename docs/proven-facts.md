@@ -138,7 +138,7 @@ Our patch accepts STATE 3 or 4 (original firmware only accepts 4).
 - `[SP,#0x3C]` (R1) = actual frame size written by sub_FF8EDBE0 (e.g. 0xB000=45056 for IDR, 0x92F8=37624 for P-frame)
 - `[SP,#0x30]` = always 0x40000 (256KB buffer capacity from MovieFrameGetter, NOT frame size)
 - `+0xD4` data offset increments by `[SP,#0x3C]` each frame (cumulative byte counter)
-**Implication**: To call sub_FF9300B4 without sub_FF8EDBE0, we need the actual frame size. This matches the AVCC 4-byte length prefix + 4. Previous skip attempts failed because sub_FF8EDC88(0) was not called before sub_FF9300B4.
+**Implication**: sub_FF9300B4 cannot be called standalone — it depends on internal state set by sub_FF8EDBE0. Tested: sub_FF9300B4 alone (0 frames/crash), sub_FF8EDC88(0)+sub_FF9300B4 (crash after 1s), both with correct AVCC-derived sizes. The ring buffer freeing is tightly coupled to the SD write pipeline.
 
 ### 7. TakeSemaphore timeout sensitivity
 **Evidence**: 50ms timeout → 347 decoded frames, stable. 1ms timeout → 1 frame then all gf_rc=-1.

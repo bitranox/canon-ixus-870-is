@@ -101,6 +101,40 @@ static void __attribute__((used,noinline)) spy_capture_free_params(
     spy_debug_send();
 }
 
+// Skip SD card write when webcam is active.
+// Replaces sub_FF8EDBE0 + TakeSemaphore + sub_FF8EDC88 + sub_FF9300B4 sequence.
+// Computes actual frame size from AVCC 4-byte big-endian length prefix,
+// then calls sub_FF8EDC88(0) and sub_FF9300B4(frame_ptr, actual_size)
+// to properly free the ring buffer slot without writing to SD card.
+static void __attribute__((used,noinline)) spy_skip_and_free(unsigned int frame_ptr)
+{
+    volatile unsigned int *hdr = (volatile unsigned int *)0x000FF000;
+    if (hdr[0] != 0x52455753) return;
+
+    unsigned char *p = (unsigned char *)frame_ptr;
+    unsigned int actual_size;
+
+    if (p[0] == 0 && p[1] == 0 && p[2] == 0 && p[3] == 1) {
+        // Annex B format (first frame = IDR): read size from ring buffer +0xDC
+        actual_size = *(volatile unsigned int *)0x8A44;  // 0x8968 + 0xDC
+    } else {
+        // AVCC format: read 4-byte big-endian length prefix
+        unsigned int avcc_len = ((unsigned int)p[0] << 24) |
+                                ((unsigned int)p[1] << 16) |
+                                ((unsigned int)p[2] << 8)  |
+                                (unsigned int)p[3];
+        actual_size = avcc_len + 4;
+    }
+
+    // Sanity check: frame size should be 1KB-64KB
+    if (actual_size < 1024 || actual_size > 65536) return;
+
+    // Call sub_FF9300B4(frame_ptr, actual_size) — free ring buffer slot
+    // NOTE: sub_FF8EDC88(0) omitted — calling it without sub_FF8EDBE0 crashes
+    void (*rb_free)(unsigned int, unsigned int) = (void (*)(unsigned int, unsigned int))0xFF9300B4;
+    rb_free(frame_ptr, actual_size);
+}
+
 // Invalidate CPU data cache lines for a memory range.
 // JPCORE DMA writes H.264 data to physical memory bypassing the CPU cache.
 // Without invalidation, CPU reads return stale cached data.
