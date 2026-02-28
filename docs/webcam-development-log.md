@@ -1953,3 +1953,124 @@ Unexplored options:
 - DMA-to-DMA copy — would bypass cache but no known DryOS DMA copy API
 - Reduce PTP task scheduling overhead (unlikely — DryOS internal)
 - Double-buffered approach: copy into a second buffer from a low-priority task
+
+## v26 Series — SD Write Prevention (2026-02-28)
+
+### Goal
+
+Prevent H.264 data from being written to the SD card during webcam mode, while keeping the entire recording pipeline intact. The frame delivery path (spy_ring_write → webcam.c → PTP → bridge) is already working at ~22 FPS. The camera currently creates a growing MOV file on the SD card during webcam recording.
+
+### v26a — Queue handle nulling (FAILED)
+
+**Approach**: Null out the message queue handle at `0x8974` (ring buffer struct +0xC) before calling sub_FF9300B4, then restore it afterward. This would prevent sub_FF9300B4 from posting messages to task_MovWrite.
+
+**Implementation**: `spy_capture_free_params` saved the queue handle and zeroed it. `spy_restore_queue` put it back. Assembly called `BL spy_capture_free_params` before `BL sub_FF9300B4` and `BL spy_restore_queue` after.
+
+**Result**: Camera received 2 frames (IDR decoded successfully, P-frame decoded), then crashed. Queue handle was 0x04FA00CA. USB died after frame 2. Battery pull required.
+
+**Analysis**: The crash at frame 2 wasn't from the periodic flush (2 % 30 = 2, not 1). Other concurrent DryOS tasks read the queue handle at 0x8974. Temporarily nulling a shared data structure causes races with other tasks.
+
+### v26b — Minimal sub_FF9300B4 replacement (FAILED)
+
+**Approach**: Replace sub_FF9300B4 with `spy_rb_free_minimal` — a C function that does only essential ring buffer bookkeeping (advance +0x1C read pointer, +0x28 frame counter, +0xD4 cumulative offset, +0x44 first-frame init) without posting messages to task_MovWrite.
+
+**Result**: Camera stable for 20 seconds (no crash) but only produced 4 frames total, then `gf_rc=-1` for the remaining time. IDR decoded successfully.
+
+**Analysis**: The H.264 encoder stalled after 3-4 frames. sub_FF9300B4 handles essential feedback to the encoder (sample tables, flush logic). Replacing it breaks the encoder's ring buffer consumption feedback loop.
+
+### v26c — Full bookkeeping (FAILED)
+
+**Approach**: Added more fields to spy_rb_free_minimal: +0x64 accumulator, +0x60 total bytes, +0x148/+0x14C remaining capacity (64-bit), +0x150/+0x154 consumed bytes, and wrap-around handling for +0xC8 boundary.
+
+**Result**: Same as v26b — stable but only 3-4 frames. RemL values were ~1.88GB and decreasing properly, so remaining capacity wasn't the bottleneck.
+
+**Conclusion**: Cannot replace sub_FF9300B4 — it has undocumented internal state that the encoder depends on.
+
+### v26d — SD pipeline skip (FAILED)
+
+**Approach**: Added webcam mode check at loc_FF85DB24 to skip the entire SD write pipeline (sub_FF8EDBE0, TakeSemaphore, sub_FF8EDC88) and jump directly to spy_rb_free_minimal.
+
+**Result**: Crashed after 1 frame. `[SP,#0x3C]` was never populated by sub_FF8EDBE0 (which was skipped), so sub_FF9300B4 received `0x2710` (10000 = timeout constant left on stack) as the frame size.
+
+### v26e — Fixed SD skip with buffer capacity (FAILED)
+
+**Approach**: Used `[SP,#0x30]` (buffer capacity from MovieFrameGetter) instead of `[SP,#0x3C]`.
+
+**Result**: Stable but only 3 frames. `[SP,#0x30]` is 0x40000 (256KB = buffer capacity), not the actual frame size. sub_FF9300B4 needs the real frame size to advance pointers correctly.
+
+### v26f — AVCC length derivation (FAILED)
+
+**Approach**: Read AVCC 4-byte length prefix from frame_ptr to derive real frame size when frame_size == 0x40000.
+
+**Result**: Crashed after 1 frame. First frame is Annex B (starts with 00 00 00 01), not AVCC. Reading `00 00 00 01` as a length gives 1, yielding frame_size=5, corrupting ring buffer state.
+
+### User feedback: wrong approach
+
+At this point the user correctly identified that all these approaches were changing the frame delivery path, which was already working. The goal is ONLY to prevent SD writes — the pipeline should run unmodified as deep as possible, with only the final file I/O prevented.
+
+> "the frame delivery part should stay as it is — and now we follow the code path which writes to the sd-card as deep as possible, and just prevent at the last possible time. by that way we keep as much as possible intact"
+
+### Ghidra decompilation of task_MovWrite
+
+Decompiled task_MovWrite (0xFF92F1EC) and related functions using a Java Ghidra headless script (Python failed — "Ghidra was not started with PyGhidra"). Key finding in the case 2 handler (the main write path):
+
+```c
+case 2:
+    bVar8 = uVar4 == 0;              // uVar4 = *(iVar1 + 0x4c) error flag
+    if (bVar8) { uVar4 = *(uint *)(iVar1 + 0x80); }  // is_open flag
+    iVar7 = local_20[1];             // buffer_addr
+    iVar6 = local_20[2];             // size
+    if (((bVar8 && uVar4 == 1) && (iVar6 != 0)) &&
+       (iVar5 = FUN_ff85235c(*(iVar1 + 0x48), iVar7, iVar6), iVar5 != iVar6)) {
+        *(iVar1 + 0x4c) = 1;         // set error flag
+    } else {
+        iVar7 = iVar7 + iVar6;
+        if (iVar7 == *(iVar1 + 200)) { iVar7 = *(iVar1 + 0xc4); }
+        *(iVar1 + 0x18) = iVar7;     // update write position (consumed pointer)
+    }
+```
+
+**Key insight**: When `+0x80` (is_open) is 0, the write condition `(bVar8 && uVar4 == 1)` fails. The else branch runs, updating the consumed pointer at `+0x18`. The entire pipeline keeps flowing — only the file I/O call `FUN_ff85235c` is skipped.
+
+### v26g — +0x80 flag clear (SUCCESS)
+
+**Approach**: Set `*(volatile unsigned int *)0x89E8 = 0` in spy_ring_write. Address 0x89E8 = ring buffer struct (0x8968) + 0x80 = the is_open flag for task_MovWrite. This is the deepest possible hook point — everything runs unmodified, only the actual file I/O is prevented.
+
+**Implementation**: Single line added to spy_ring_write:
+```c
+*(volatile unsigned int *)0x89E8 = 0;
+```
+
+No assembly changes. No new functions. The entire recording pipeline (sub_FF8EDBE0, TakeSemaphore, sub_FF8EDC88, sub_FF9300B4, message posting, task_MovWrite queue processing) runs unmodified.
+
+**Result**: Full success.
+- **20 seconds, clean shutdown** — camera stopped recording normally
+- **457 frames produced, 404 decoded** by bridge
+- **35 IDR keyframes** (periodic GOP keyframes from encoder)
+- **~22 FPS** average, matching previous best
+- **~7 Mbps** average bitrate
+- **MVI_4138.MOV created but 0 bytes** — file opened (case 1 handler) but no data written (case 2 handler skipped writes)
+- **SD card usage unchanged** (9.4M / 1%) — no data written to card
+- Camera auto-deletes the 0-byte MOV file on clean shutdown
+
+**Why this works**: task_MovWrite's case 1 handler sets +0x80 = 1 when opening the file. Our spy_ring_write clears it back to 0 on every frame. Case 2 checks +0x80 before every write — finds it 0, skips the FUN_ff85235c call, but still updates the consumed pointer. The pipeline sees no errors. The encoder keeps producing frames because all ring buffer management (sub_FF9300B4) runs normally.
+
+### Dead ends summary (SD write prevention)
+
+| Approach | Result | Root cause |
+|----------|--------|------------|
+| Queue handle nulling (+0xC = 0) | Crash at frame 2 | Other tasks read queue handle concurrently |
+| Replace sub_FF9300B4 (minimal) | Encoder stalls at frame 3-4 | Missing encoder feedback (sample tables, flush) |
+| Full bookkeeping replacement | Same stall | Same — cannot replicate sub_FF9300B4 |
+| Skip SD pipeline (sub_FF8EDBE0) | Crash at frame 1 | [SP,#0x3C] never populated |
+| Use buffer capacity for size | 3 frames then stall | 0x40000 ≠ actual frame size |
+| AVCC length derivation | Crash at frame 1 | First frame is Annex B, not AVCC |
+| **+0x80 flag clear** | **SUCCESS** | Pipeline runs unmodified, only file I/O skipped |
+
+### Frame loss analysis
+
+Camera produces 30fps internally but we receive ~22fps. Sources of loss:
+1. **Single-slot shared memory**: spy_ring_write overwrites ptr/size at 0xFF000 with each new frame. If PTP hasn't polled since the last frame, the previous frame is lost. ~8 frames/sec lost this way.
+2. **PTP task scheduling overhead**: Each PTP request takes ~37ms (msleep(10) + memcpy + DryOS scheduling), giving ~27 req/sec max throughput.
+
+The camera's ring buffer already stores all frames — during normal recording, the MOV file has no frame loss. A future improvement could read frames from the ring buffer sequentially instead of using the single-slot shared memory approach.

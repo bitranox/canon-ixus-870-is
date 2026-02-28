@@ -65,75 +65,17 @@ static void spy_debug_send(void)
     hdr[8] = next_wr;
 }
 
-// Capture sub_FF9300B4 parameters during normal operation.
-// Called from assembly right before sub_FF9300B4 at loc_FF85DC84.
-// R0 = frame_ptr [SP,#0x34], R1 = sub_FF8EDBE0 output [SP,#0x3C].
-// Sends one debug frame on msg 6 calls 1-3 only.
-static int spy_rb_free_count = 0;
-
-static void __attribute__((used,noinline)) spy_capture_free_params(
-    unsigned int frame_ptr, unsigned int edbe0_out,
-    unsigned int sp30_bufsz, unsigned int sp28_val)
-{
-    volatile unsigned int *hdr = (volatile unsigned int *)0x000FF000;
-    if (hdr[0] != 0x52455753) { spy_rb_free_count = 0; return; }
-
-    spy_rb_free_count++;
-    if (spy_rb_free_count > 3) return;
-
-    // Also read ring buffer +0x1C (read ptr) and +0x148/+0x150 (free/used counts)
-    unsigned int rb_read_ptr = *(volatile unsigned int *)0x8984;   // 0x8968 + 0x1C
-    unsigned int rb_free_cnt = *(volatile unsigned int *)0x8AB0;   // 0x8968 + 0x148
-    unsigned int rb_used_cnt = *(volatile unsigned int *)0x8AB8;   // 0x8968 + 0x150
-    unsigned int rb_data_off = *(volatile unsigned int *)0x8A3C;   // 0x8968 + 0xD4
-
-    spy_debug_reset();
-    spy_debug_add('S','r','c','_', 0x46524545);  // "FREE"
-    spy_debug_add('F','r','N','o', spy_rb_free_count);
-    spy_debug_add('F','P','t','r', frame_ptr);     // R0 to sub_FF9300B4
-    spy_debug_add('E','D','o','t', edbe0_out);     // R1 to sub_FF9300B4 ([SP,#0x3C])
-    spy_debug_add('B','u','f','S', sp30_bufsz);    // [SP,#0x30] = 0x40000?
-    spy_debug_add('S','2','8','v', sp28_val);      // [SP,#0x28]
-    spy_debug_add('R','d','P','t', rb_read_ptr);   // ring buffer read pointer
-    spy_debug_add('F','r','C','t', rb_free_cnt);   // ring buffer free count
-    spy_debug_add('U','s','C','t', rb_used_cnt);   // ring buffer used count
-    spy_debug_add('D','O','f','f', rb_data_off);   // ring buffer data offset
-    spy_debug_send();
-}
-
-// Skip SD card write when webcam is active.
-// Replaces sub_FF8EDBE0 + TakeSemaphore + sub_FF8EDC88 + sub_FF9300B4 sequence.
-// Computes actual frame size from AVCC 4-byte big-endian length prefix,
-// then calls sub_FF8EDC88(0) and sub_FF9300B4(frame_ptr, actual_size)
-// to properly free the ring buffer slot without writing to SD card.
-static void __attribute__((used,noinline)) spy_skip_and_free(unsigned int frame_ptr)
-{
-    volatile unsigned int *hdr = (volatile unsigned int *)0x000FF000;
-    if (hdr[0] != 0x52455753) return;
-
-    unsigned char *p = (unsigned char *)frame_ptr;
-    unsigned int actual_size;
-
-    if (p[0] == 0 && p[1] == 0 && p[2] == 0 && p[3] == 1) {
-        // Annex B format (first frame = IDR): read size from ring buffer +0xDC
-        actual_size = *(volatile unsigned int *)0x8A44;  // 0x8968 + 0xDC
-    } else {
-        // AVCC format: read 4-byte big-endian length prefix
-        unsigned int avcc_len = ((unsigned int)p[0] << 24) |
-                                ((unsigned int)p[1] << 16) |
-                                ((unsigned int)p[2] << 8)  |
-                                (unsigned int)p[3];
-        actual_size = avcc_len + 4;
-    }
-
-    // Sanity check: frame size should be 1KB-64KB
-    if (actual_size < 1024 || actual_size > 65536) return;
-
-    // Call sub_FF9300B4(frame_ptr, actual_size) — free ring buffer slot
-    // NOTE: sub_FF8EDC88(0) omitted — calling it without sub_FF8EDBE0 crashes
-    void (*rb_free)(unsigned int, unsigned int) = (void (*)(unsigned int, unsigned int))0xFF9300B4;
-    rb_free(frame_ptr, actual_size);
-}
+// SD write prevention: clear +0x80 (is_open flag) in the ring buffer struct.
+// Decompiled task_MovWrite (0xFF92F1EC) case 2 handler:
+//   if (error == 0 && *(base + 0x80) == 1 && size != 0)
+//       FUN_ff85235c(fd, buf, size);  // actual file write
+//   else
+//       update write position (+0x18) only;  // no write, pipeline keeps flowing
+//
+// By clearing +0x80, the write condition fails and task_MovWrite just updates
+// the consumed pointer.  The entire pipeline (sub_FF9300B4, sub_FF8EDBE0,
+// message posting, queue processing) runs unmodified.  Only the deepest
+// point — the actual file I/O call — is prevented.
 
 // Invalidate CPU data cache lines for a memory range.
 // JPCORE DMA writes H.264 data to physical memory bypassing the CPU cache.
@@ -187,20 +129,25 @@ static int __attribute__((used,noinline)) spy_take_sem_short(int sem, int timeou
 //   [1] src_ptr  = ring buffer pointer
 //   [2] size     = frame data size
 //   [3] seq      = seqlock counter (odd = write in progress, even = stable)
-// Stores frame pointer+size via seqlock for webcam.c to read.
-// Cache invalidation ensures CPU reads fresh DMA-written H.264 data.
+//
 static void __attribute__((used,noinline)) spy_ring_write(unsigned char *ptr, unsigned int size)
 {
     volatile unsigned int *hdr = (volatile unsigned int *)0x000FF000;
-    if (hdr[0] != 0x52455753) return;
 
-    spy_cache_invalidate(ptr, size);
+    if (hdr[0] == 0x52455753) {
+        spy_cache_invalidate(ptr, size);
 
-    hdr[3]++;
-    hdr[1] = (unsigned int)ptr;
-    hdr[2] = size;
-    hdr[3]++;
+        // Prevent SD card writes: clear task_MovWrite's is_open flag.
+        // 0x89E8 = ring buffer struct (0x8968) + 0x80.
+        // task_MovWrite checks this before every file write; when 0,
+        // it skips the write but still updates the consumed pointer.
+        *(volatile unsigned int *)0x89E8 = 0;
 
+        hdr[3]++;
+        hdr[1] = (unsigned int)ptr;
+        hdr[2] = size;
+        hdr[3]++;
+    }
 }
 
 void __attribute__((naked,noinline)) movie_record_task(){
@@ -527,12 +474,6 @@ void __attribute__((naked,noinline)) sub_FF85D98C_my(){
  "loc_FF85DC84:\n"
                  "MOV     R0, #0\n"
                  "BL      sub_FF8EDC88\n"
-                 // Debug: capture sub_FF9300B4 params before calling it
-                 "LDR     R0, [SP,#0x34]\n"    // frame_ptr
-                 "LDR     R1, [SP,#0x3C]\n"    // sub_FF8EDBE0 output
-                 "LDR     R2, [SP,#0x30]\n"    // buffer size
-                 "LDR     R3, [SP,#0x28]\n"    // SP+0x28 value
-                 "BL      spy_capture_free_params\n"
                  "LDR     R0, [SP,#0x34]\n"
                  "LDR     R1, [SP,#0x3C]\n"
                  "BL      sub_FF9300B4\n"

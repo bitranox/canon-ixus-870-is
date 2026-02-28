@@ -1,6 +1,6 @@
 # Proven Facts — Canon IXUS 870 IS Webcam Project
 
-Last updated: 2026-02-22
+Last updated: 2026-02-28
 
 This document contains ONLY verified, tested facts. No speculation, no history.
 Each fact includes the evidence that proved it.
@@ -41,6 +41,7 @@ The ring buffer struct is always at RAM address 0x8968. Confirmed by reading
 | +0xC4 | 0x8A2C | ptr | | Alternate/wrap buffer pointer | MovieFrameGetter decompilation line 973 |
 | +0xC8 | 0x8A30 | ptr | | Buffer end pointer | MovieFrameGetter decompilation line 970 |
 | +0xD4 | 0x8A3C | uint | | Running data offset (for MOV sample table) | MovieFrameGetter decompilation line 965 |
+| +0x80 | 0x89E8 | uint | 0 or 1 | **task_MovWrite is_open flag**: 1=file open, 0=skip writes | Ghidra decompilation + v26g test |
 | +0xD8 | 0x8A40 | uint | 0x000158AC (88236) | IDR offset in data area (MOV container metadata) | Multiple debug probes, consistent value |
 | +0xDC | 0x8A44 | uint | 0x0000CFE8 (53224) | IDR size in data area | Debug probe: ISiz=0xCFE8 |
 
@@ -80,6 +81,8 @@ The ring buffer struct is always at RAM address 0x8968. Confirmed by reading
 | 0xFF8EDBE0 | sub_FF8EDBE0 | | Async SD card write submit; writes actual frame size to [SP,#0x3C] | Debug probe: EDot matches frame size |
 | 0xFF8EDC88 | sub_FF8EDC88 | | SD write cleanup; called with arg 1 (first chunk) and 0 (final) | Decompilation, msg 6 flow |
 | 0xFF9300B4 | sub_FF9300B4 | | Ring buffer slot free: advances +0x1C read ptr by param_2 bytes | Debug probe + decompilation |
+| 0xFF92F1EC | task_MovWrite | | DryOS task: receives ring buffer data via queue, writes to SD card | Ghidra decompilation (DecompileMovWrite.java) |
+| 0xFF85235C | FUN_ff85235c | | File write: writes buffer to fd, returns bytes written | task_MovWrite case 2 decompilation |
 
 ## Message Flow (movie_record_task)
 
@@ -144,6 +147,15 @@ Our patch accepts STATE 3 or 4 (original firmware only accepts 4).
 **Evidence**: 50ms timeout → 347 decoded frames, stable. 1ms timeout → 1 frame then all gf_rc=-1.
 **Cause**: 1ms is too short — sub_FF8EDBE0 hasn't started the async write, so returning fake success while the DMA state is inconsistent corrupts the pipeline.
 
+### 8. SD write prevention via +0x80 flag clear
+**Evidence**: Setting `*(0x89E8) = 0` (ring buffer +0x80) in spy_ring_write → 457 frames over 20 seconds, 0-byte MOV file, SD usage unchanged (9.4M / 1%), clean shutdown.
+**Mechanism**: task_MovWrite case 2 checks `*(base + 0x80) == 1` before calling FUN_ff85235c (file write). When 0, it skips the write but still updates the consumed pointer at `+0x18`. The entire pipeline runs unmodified.
+**Implication**: This is the deepest possible hook point. All ring buffer management, DMA, semaphores, and message posting run normally. Only the actual file I/O is prevented.
+
+### 9. sub_FF9300B4 cannot be replaced or skipped
+**Evidence**: Replacing sub_FF9300B4 with minimal bookkeeping (read pointer, frame counter, cumulative offset) → encoder stalls after 3-4 frames. Adding full bookkeeping (+0x64, +0x60, +0x148/+0x14C, +0x150/+0x154, wrap-around) → same stall. Skipping the SD pipeline entirely (sub_FF8EDBE0, TakeSemaphore, sub_FF8EDC88) → crash or stall.
+**Cause**: sub_FF9300B4 handles undocumented internal state (sample tables, flush logic) that the H.264 encoder feedback loop depends on. The recording pipeline is tightly coupled — all components must run.
+
 ## Current Webcam Data Flow
 
 ```
@@ -158,28 +170,40 @@ MovieFrameGetter (0xFF92FE8C)
     │ returns frame pointer + size to msg 6 handler
     ▼
 sub_FF85D98C_my (msg 6 handler)
-    │ calls spy_idr_capture (debug), then spy_ring_write
+    │ calls spy_ring_write (delivers frame + prevents SD writes)
+    │ then continues through SD write pipeline (all runs unmodified)
     ▼
 spy_ring_write
-    │ stores ptr+size at 0xFF000 shared memory
-    │ signals semaphore
+    │ stores ptr+size at 0xFF000 shared memory (seqlock protocol)
+    │ clears +0x80 (is_open) at 0x89E8 → prevents SD file writes
+    ▼
+SD write pipeline (runs unmodified)
+    │ sub_FF8EDBE0 → TakeSemaphore → sub_FF8EDC88 → sub_FF9300B4
+    │ → posts message to task_MovWrite queue
+    ▼
+task_MovWrite (0xFF92F1EC)
+    │ case 2: checks +0x80 → finds 0 → skips FUN_ff85235c
+    │ still updates consumed pointer (+0x18) → pipeline keeps flowing
     ▼
 webcam.c (CHDK module)
-    │ reads ptr+size, memcpy to PTP response buffer
+    │ reads ptr+size from 0xFF000, memcpy to PTP response buffer
     ▼
-PTP USB transfer
-    │ bridge receives frame via libusb
-    ▼
-H.264 decoder (FFmpeg)
-    │ decodes frame (NEEDS IDR first, currently never gets one)
-    ▼
-JPEG output → virtual webcam
+PTP USB transfer → bridge → FFmpeg decode → virtual webcam
 ```
+
+## Current Performance
+
+| Metric | Value | Evidence |
+|--------|-------|----------|
+| Frames produced | 457 in 20s (~23 fps) | v26g test |
+| Frames decoded | 404 (88%) | v26g bridge output |
+| IDR keyframes | 35 (~1/sec from GOP) | v26g bridge output |
+| Average bitrate | ~7 Mbps | v26g bridge output |
+| SD card writes | 0 bytes | 0-byte MOV file, SD usage unchanged |
+| Frame loss source | Single-slot shared memory overwrite | ~8 frames/sec lost between PTP polls |
 
 ## What Needs to Happen Next
 
-The IDR data at `*(0x8A28)` (pointer 0x412C4720) persists throughout recording.
-The webcam module needs to read this pointer and send the SPS+PPS+IDR data as
-frame #0 when PTP polling begins, before switching to the normal P-frame stream
-from spy_ring_write. The data is in Annex B format and needs to either be
-converted to AVCC or the bridge needs to handle both formats.
+1. **Code cleanup**: Remove unused debug functions (spy_idr_capture, spy_msg5_debug statics). Evaluate whether spy_take_sem_short is still needed with +0x80 approach.
+2. **Frame loss reduction**: The ring buffer already stores all 30fps frames. Reading sequentially from the ring buffer instead of using single-slot shared memory could eliminate the ~8fps loss.
+3. **Virtual webcam integration**: Connect the H.264 decode output to a DirectShow virtual webcam filter for use in video conferencing apps.
