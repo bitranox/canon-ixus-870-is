@@ -2084,3 +2084,39 @@ The camera's ring buffer already stores all frames — during normal recording, 
 **Conclusion**: Cannot remove msleep from the single-slot seqlock approach. DryOS cooperative multitasking requires yielding (msleep) in polling loops. The 4-slot SPSC ring buffer approach would eliminate this bottleneck by decoupling producer/consumer timing — no tight polling needed, just check write_idx != read_idx.
 
 Reverted to working msleep(10) state.
+
+### v27a — DryOS Message Queue Frame Delivery (partial success)
+
+**Approach**: Replace seqlock protocol with DryOS message queue (CreateMessageQueue/PostMessageQueue/ReceiveMessageQueue). Eliminates shared memory indices entirely — frame descriptors live in BSS (safe from DMA corruption), DryOS kernel handles synchronization.
+
+- webcam.c: CreateMessageQueue("WcamQ", depth=8), stores handle in spy[4]
+- movie_rec.c: caches queue handle from spy[4] on first call, PostMessageQueue sends pointer to BSS frame_desc_t {ptr, size}
+- webcam.c: ReceiveMessageQueue blocks up to 100ms (replaces seqlock polling)
+- 8 descriptor slots in BSS, wr_idx only advances on successful post
+
+**Build**: CHDK compiled successfully. Deployed DISKBOOT.BIN + webcam.flt.
+
+**Result**: 56 frames received in 20 seconds (~2.8 fps), 546 decode failures. Camera recorded full 20 seconds (lens stayed open, no pipeline stall). Huge drop from seqlock baseline (457 frames, 22fps).
+
+```
+UNIQUE #1 (cam#1, 46708 bytes) NAL=0x65 (IDR)
+UNIQUE #2 (cam#2, 43696 bytes) NAL=0x61 (P-frame)
+...
+UNIQUE #10 (cam#10, 38096 bytes) NAL=0x61 (P-frame)
+IDR #4 (cam#11) ... IDR #24 (cam#56)    <- after first 10, ONLY IDRs decode
+Total: 56 unique, 546 drops, 602 PTP responses in 20s
+```
+
+**Analysis**: First 10 frames decoded fine (IDR + P-frames). After that, only IDR frames (self-contained, type 5) decode — all P-frames fail. This is the classic symptom of stale VRAM data:
+
+1. Queue depth 8 exceeds VRAM ring buffer depth (~3-4 slots)
+2. spy_ring_write posts 8 frame descriptors with VRAM pointers
+3. By the time consumer (PTP task) reads descriptors 4-8, the VRAM ring buffer has recycled those memory locations
+4. memcpy reads stale/overwritten data from recycled VRAM slots
+5. P-frames fail because their encoded data is corrupted; IDRs succeed because they're self-contained
+
+Also identified descriptor overwrite bug: when PostMessageQueue returns 9 (full), wr_idx doesn't advance, so next frame overwrites the same descriptor slot — which is still referenced by a message in the queue.
+
+**Key insight**: Queue depth must not exceed VRAM ring buffer depth. The seqlock worked because it had zero buffering — memcpy happened immediately at poll time, while VRAM data was still valid.
+
+**Next step**: Reduce queue depth to 2, use 4 descriptor slots (2x queue depth prevents in-queue descriptor overwrite), always advance wr_idx even on failed post.

@@ -174,7 +174,8 @@ sub_FF85D98C_my (msg 6 handler)
     │ then continues through SD write pipeline (all runs unmodified)
     ▼
 spy_ring_write
-    │ stores ptr+size at 0xFF000 shared memory (seqlock protocol)
+    │ fills BSS frame descriptor {ptr, size}
+    │ PostMessageQueue → DryOS kernel queue (handle cached from spy[4])
     │ clears +0x80 (is_open) at 0x89E8 → prevents SD file writes
     ▼
 SD write pipeline (runs unmodified)
@@ -186,7 +187,8 @@ task_MovWrite (0xFF92F1EC)
     │ still updates consumed pointer (+0x18) → pipeline keeps flowing
     ▼
 webcam.c (CHDK module)
-    │ reads ptr+size from 0xFF000, memcpy to PTP response buffer
+    │ ReceiveMessageQueue (blocks until frame posted)
+    │ reads ptr+size from BSS descriptor, memcpy to PTP response buffer
     ▼
 PTP USB transfer → bridge → FFmpeg decode → virtual webcam
 ```

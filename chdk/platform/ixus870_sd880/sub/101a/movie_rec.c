@@ -119,34 +119,72 @@ static int __attribute__((used,noinline)) spy_take_sem_short(int sem, int timeou
     }
 }
 
-// Store H.264 frame pointer+size using seqlock protocol.
+// Deliver H.264 frame to webcam module via DryOS message queue.
 // Called from sub_FF85D98C_my after sub_FF92FE8C returns each encoded frame.
-// Invalidates CPU cache for the frame data so webcam.c's memcpy reads
-// fresh DMA-written data instead of stale cached values.
+// Invalidates CPU cache for the frame data (JPCORE DMA bypasses cache).
 //
-// Shared memory protocol at 0x000FF000 (initialized by webcam.c):
-//   [0] magic    = 0x52455753 when active
-//   [1] src_ptr  = ring buffer pointer
-//   [2] size     = frame data size
-//   [3] seq      = seqlock counter (odd = write in progress, even = stable)
+// Frame descriptors live in BSS (immune to DMA corruption at 0xFF000).
+// The DryOS message queue handle is cached from hdr[4] (set by webcam.c).
+// PostMessageQueue sends a pointer to the BSS descriptor; webcam.c's
+// ReceiveMessageQueue blocks until a frame is posted (no polling needed).
 //
+// Shared memory layout at 0x000FF000:
+//   [0] magic    = 0x52455753 when active (set by webcam.c)
+//   [4] queue    = DryOS message queue handle (set by webcam.c)
+//   [8] dbg_wr   = debug queue write index
+//   [9] dbg_rd   = debug queue read index
+
+// Frame descriptor ring buffer (in BSS — safe from DMA corruption)
+#define FRAME_RING_DEPTH  8
+
+typedef struct {
+    unsigned int ptr;
+    unsigned int size;
+} frame_desc_t;
+
+static frame_desc_t ring_descs[FRAME_RING_DEPTH];
+static unsigned int wr_idx = 0;
+static int cached_queue = 0;   // cached queue handle from hdr[4]
+static int was_active = 0;
+
 static void __attribute__((used,noinline)) spy_ring_write(unsigned char *ptr, unsigned int size)
 {
     volatile unsigned int *hdr = (volatile unsigned int *)0x000FF000;
 
     if (hdr[0] == 0x52455753) {
+        // Session start: reset state, cache queue handle
+        if (!was_active) {
+            wr_idx = 0;
+            cached_queue = (int)hdr[4];
+            was_active = 1;
+        }
+
         spy_cache_invalidate(ptr, size);
 
         // Prevent SD card writes: clear task_MovWrite's is_open flag.
-        // 0x89E8 = ring buffer struct (0x8968) + 0x80.
-        // task_MovWrite checks this before every file write; when 0,
-        // it skips the write but still updates the consumed pointer.
         *(volatile unsigned int *)0x89E8 = 0;
 
-        hdr[3]++;
-        hdr[1] = (unsigned int)ptr;
-        hdr[2] = size;
-        hdr[3]++;
+        // Fill frame descriptor in BSS
+        {
+            unsigned int slot = wr_idx % FRAME_RING_DEPTH;
+            ring_descs[slot].ptr = (unsigned int)ptr;
+            ring_descs[slot].size = size;
+
+            // Drain write buffer before posting
+            asm volatile("mcr p15, 0, %0, c7, c10, 4" : : "r"(0));
+
+            // Post descriptor pointer to DryOS queue
+            if (cached_queue) {
+                int (*post_msg)(int, unsigned int, int) =
+                    (int (*)(int, unsigned int, int))0xFF8271E4;
+                int ret = post_msg(cached_queue,
+                                   (unsigned int)&ring_descs[slot], 0);
+                if (ret == 0) wr_idx++;  // only advance on successful post
+            }
+        }
+    } else {
+        was_active = 0;
+        cached_queue = 0;
     }
 }
 
