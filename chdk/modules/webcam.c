@@ -1,13 +1,15 @@
 // CHDK Webcam Module
 // Switches camera to video mode and starts H.264 recording.
-// Intercepts encoded frames from the recording pipeline via a DryOS
-// message queue, available over PTP to a PC bridge.
+// Intercepts encoded frames from the recording pipeline via a seqlock
+// in shared memory + DryOS message queue notification, available over
+// PTP to a PC bridge.
 //
 // movie_rec.c hooks spy_ring_write into sub_FF85D98C_my after each
 // encoded frame.  spy_ring_write invalidates the CPU data cache for the
-// frame data (JPCORE DMA bypasses cache) and posts a frame descriptor
-// (pointer to BSS struct) via PostMessageQueue.  capture_frame_h264()
-// calls ReceiveMessageQueue which blocks until a frame is posted.
+// frame data (JPCORE DMA bypasses cache), stores {ptr, size} via seqlock
+// at 0xFF000, and sends a non-blocking notification via TryPostMessageQueue.
+// capture_frame_h264() blocks on ReceiveMessageQueue until notified, then
+// reads the seqlock for the latest frame data.
 //
 // On the first capture call, the IDR keyframe is read directly from the
 // ring buffer's +0xC0 pointer (which persists throughout recording) and
@@ -68,21 +70,25 @@ static int idr_injected = 0;
 // contains SPS/PPS — Canon stores it only in the MOV container metadata.
 
 // ============================================================
-// Shared memory: DryOS message queue frame delivery
-// webcam.c creates the queue and stores its handle in shared
-// memory; movie_rec.c caches the handle and posts frame
-// descriptors (BSS pointers) via PostMessageQueue.
+// Shared memory: seqlock data + DryOS queue wakeup
+// Data delivery uses seqlock protocol (proven at 22fps).
+// DryOS message queue provides instant wakeup notification
+// (replaces msleep(10) polling for lower latency).
 // ============================================================
 #define WEBCAM_SPY_ADDR    ((volatile unsigned int *)0x000FF000)
 // spy[0] = magic    (0x52455753 = active, set by webcam.c)
+// spy[1] = ptr      (frame data pointer, set by movie_rec.c, seqlock)
+// spy[2] = size     (frame data size, set by movie_rec.c, seqlock)
+// spy[3] = seq      (sequence counter: odd=writing, even=stable)
 // spy[4] = queue    (DryOS message queue handle, set by webcam.c)
 // spy[8] = dbg_wr   (debug queue write index)
 // spy[9] = dbg_rd   (debug queue read index)
 
 // DryOS message queue firmware functions (not stubbed in CHDK)
-#define FW_CreateMessageQueue   ((void *)0xFF826F84)
-#define FW_DeleteMessageQueue   ((void *)0xFF827008)
-#define FW_ReceiveMessageQueue  ((void *)0xFF827098)
+#define FW_CreateMessageQueue      ((void *)0xFF826F84)
+#define FW_DeleteMessageQueue      ((void *)0xFF827008)
+#define FW_ReceiveMessageQueue     ((void *)0xFF827098)
+#define FW_TryReceiveMessageQueue  ((void *)0xFF827160)
 
 static int frame_queue = 0;  // DryOS message queue handle
 
@@ -90,11 +96,11 @@ static int frame_queue = 0;  // DryOS message queue handle
 // H.264 frame capture from recording spy buffer
 // ============================================================
 
-// Capture an H.264 encoded frame via DryOS message queue.
-// movie_rec.c's spy_ring_write() posts frame descriptors (BSS pointers)
-// via PostMessageQueue.  We call ReceiveMessageQueue which blocks until
-// a frame is posted (up to 100ms timeout).  spy_ring_write invalidates
-// the CPU cache for frame data at write time.
+// Capture an H.264 encoded frame via seqlock + DryOS queue wakeup.
+// movie_rec.c's spy_ring_write() stores frame ptr/size via seqlock at
+// 0xFF000 and sends a non-blocking notification via TryPostMessageQueue.
+// We call ReceiveMessageQueue to block until notified (up to 100ms),
+// then drain extra notifications and read the seqlock for latest data.
 //
 // The data is H.264 NAL units in AVCC format (4-byte big-endian
 // length prefix, as used in MOV containers).
@@ -109,6 +115,7 @@ static int capture_frame_h264(void)
     if (hdr[0] != 0x52455753) return 0;
 
     // Check debug queue (lock-free SPSC: we read hdr[8]=write_idx, we own hdr[9]=read_idx)
+    // Validate "DBG!" magic at slot[4..7] to reject DMA-corrupted indices.
     {
         unsigned int wr = hdr[8];
         unsigned int rd = hdr[9];
@@ -116,7 +123,9 @@ static int capture_frame_h264(void)
             volatile unsigned char *slot =
                 (volatile unsigned char *)(0x000FF040 + rd * 512);
             unsigned int dbg_size = *(volatile unsigned short *)slot;
-            if (dbg_size >= 12 && dbg_size <= 508) {
+            if (dbg_size >= 12 && dbg_size <= 508
+                && slot[4] == 'D' && slot[5] == 'B'
+                && slot[6] == 'G' && slot[7] == '!') {
                 unsigned int i;
                 for (i = 0; i < dbg_size; i++)
                     frame_data_buf[i] = slot[4 + i];
@@ -246,33 +255,44 @@ static int capture_frame_h264(void)
         }
     }
 
-    // Receive frame descriptor from DryOS message queue (blocks up to 100ms).
-    // movie_rec.c's spy_ring_write posts a pointer to a BSS frame_desc_t
-    // containing {ptr, size}. ReceiveMessageQueue wakes instantly on post.
+    // Read frame via seqlock protocol — v26g proven approach.
+    // msleep(10) between polls allows DryOS task switching to evict
+    // stale cache lines for the spy header.
     {
-        unsigned int msg_val = 0;
-        unsigned int recv_args[3];
-        unsigned char *src_ptr;
-        int result;
+        static unsigned int last_seq = 0;
+        int polls;
 
-        if (!frame_queue) return 0;
+        for (polls = 0; polls < 100; polls++) {
+            unsigned int seq_before, seq_after;
+            unsigned char *src_ptr;
 
-        recv_args[0] = (unsigned int)frame_queue;
-        recv_args[1] = (unsigned int)&msg_val;
-        recv_args[2] = 100;  // 100ms timeout
+            seq_before = hdr[3];
 
-        result = (int)call_func_ptr(FW_ReceiveMessageQueue, recv_args, 3);
-        if (result != 0 || msg_val == 0) return 0;
+            // Skip if write in progress (odd) or no new data (unchanged)
+            if ((seq_before & 1) || seq_before == last_seq) {
+                msleep(10);
+                continue;
+            }
 
-        {
-            unsigned int *desc = (unsigned int *)msg_val;
-            src_ptr = (unsigned char *)desc[0];
-            size = desc[1];
+            // New frame detected. msleep(10) ensures cache eviction for
+            // both spy header and frame data before memcpy.
+            msleep(10);
+
+            src_ptr = (unsigned char *)hdr[1];
+            size = hdr[2];
+            if (!src_ptr || size == 0) continue;
+            if (size > SPY_BUF_SIZE) size = SPY_BUF_SIZE;
+
+            memcpy(frame_data_buf, src_ptr, size);
+
+            seq_after = hdr[3];
+            if (seq_before == seq_after) {
+                last_seq = seq_before;
+                break;  // Consistent copy
+            }
+            // Seq changed during copy — frame overwritten, retry
         }
-
-        if (!src_ptr || size == 0) return 0;
-        if (size > SPY_BUF_SIZE) size = SPY_BUF_SIZE;
-        memcpy(frame_data_buf, src_ptr, size);
+        if (polls >= 100) return 0;
     }
 
     // Parse AVCC NAL units to determine actual H.264 frame size.
@@ -426,26 +446,13 @@ static int webcam_start(int jpeg_quality)
         frame_data_buf = malloc(SPY_BUF_SIZE);
     }
 
-    // Create DryOS message queue for frame delivery.
-    // Must be done BEFORE starting recording so spy_ring_write sees
-    // valid state from the first frame.
+    // Initialize shared spy buffer header (must be done BEFORE starting
+    // recording so spy_ring_write sees valid state from the first frame).
     {
         volatile unsigned int *spy = WEBCAM_SPY_ADDR;
         int si;
-        unsigned int create_args[2];
-
         for (si = 0; si < 16; si++) spy[si] = 0;
-
-        // Create queue: name="WcamQ", depth=8
-        create_args[0] = (unsigned int)"WcamQ";
-        create_args[1] = 8;
-        frame_queue = (int)call_func_ptr(FW_CreateMessageQueue, create_args, 2);
-
-        if (frame_queue) {
-            spy[4] = (unsigned int)frame_queue;  // Store handle for movie_rec.c
-        }
-
-        spy[0] = 0x52455753;                    // Magic (enable LAST)
+        spy[0] = 0x52455753;                          // Magic (enable LAST)
     }
 
     // Start video recording via the firmware's CtrlSrv event system.
@@ -493,14 +500,6 @@ static int webcam_stop(void)
         spy[0] = 0;
     }
     msleep(50);  // Let any in-progress spy_ring_write complete
-
-    // Delete the DryOS message queue
-    if (frame_queue) {
-        unsigned int del_args[1];
-        del_args[0] = (unsigned int)frame_queue;
-        call_func_ptr(FW_DeleteMessageQueue, del_args, 1);
-        frame_queue = 0;
-    }
 
     // Stop recording if we started it
     if (recording_active) {

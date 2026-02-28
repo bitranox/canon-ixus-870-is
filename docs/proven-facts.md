@@ -156,6 +156,12 @@ Our patch accepts STATE 3 or 4 (original firmware only accepts 4).
 **Evidence**: Replacing sub_FF9300B4 with minimal bookkeeping (read pointer, frame counter, cumulative offset) → encoder stalls after 3-4 frames. Adding full bookkeeping (+0x64, +0x60, +0x148/+0x14C, +0x150/+0x154, wrap-around) → same stall. Skipping the SD pipeline entirely (sub_FF8EDBE0, TakeSemaphore, sub_FF8EDC88) → crash or stall.
 **Cause**: sub_FF9300B4 handles undocumented internal state (sample tables, flush logic) that the H.264 encoder feedback loop depends on. The recording pipeline is tightly coupled — all components must run.
 
+### 10. DryOS CreateMessageQueue breaks the recording pipeline
+**Evidence**: Calling `CreateMessageQueue` via `call_func_ptr` in webcam.c (even without using the queue for notification) caused frame delivery to drop from 404 to 62. Removing the queue creation restored performance to 349 (within normal variance of v26g's 404).
+**Tested**: v27a (pure queue delivery: 56 frames), v27b (reduced depth: 35), v27c (hybrid seqlock+queue: 21-32), v27d with queue creation only (62), v27d without queue (349).
+**Cause**: The DryOS queue allocation likely affects memory regions or kernel state that JPCORE DMA or the recording pipeline depends on. The `call_func_ptr` call to firmware allocation functions from CHDK module context is not safe during active recording.
+**Implication**: Cannot use DryOS message queues (or likely semaphores/other kernel objects created at runtime) for webcam frame delivery. Must use the seqlock approach with polling.
+
 ## Current Webcam Data Flow
 
 ```
@@ -174,8 +180,8 @@ sub_FF85D98C_my (msg 6 handler)
     │ then continues through SD write pipeline (all runs unmodified)
     ▼
 spy_ring_write
-    │ fills BSS frame descriptor {ptr, size}
-    │ PostMessageQueue → DryOS kernel queue (handle cached from spy[4])
+    │ invalidates CPU cache for frame data (JPCORE DMA bypasses cache)
+    │ stores {ptr, size} via seqlock at 0xFF000 (hdr[1..3])
     │ clears +0x80 (is_open) at 0x89E8 → prevents SD file writes
     ▼
 SD write pipeline (runs unmodified)
@@ -187,8 +193,8 @@ task_MovWrite (0xFF92F1EC)
     │ still updates consumed pointer (+0x18) → pipeline keeps flowing
     ▼
 webcam.c (CHDK module)
-    │ ReceiveMessageQueue (blocks until frame posted)
-    │ reads ptr+size from BSS descriptor, memcpy to PTP response buffer
+    │ polls seqlock (100 × msleep(10)), memcpy from VRAM on match
+    │ copies frame data to PTP response buffer
     ▼
 PTP USB transfer → bridge → FFmpeg decode → virtual webcam
 ```
@@ -197,15 +203,15 @@ PTP USB transfer → bridge → FFmpeg decode → virtual webcam
 
 | Metric | Value | Evidence |
 |--------|-------|----------|
-| Frames produced | 457 in 20s (~23 fps) | v26g test |
-| Frames decoded | 404 (88%) | v26g bridge output |
-| IDR keyframes | 35 (~1/sec from GOP) | v26g bridge output |
+| Frames produced | 432-457 in 20s (~22 fps) | v26g: 457, v27d revert: 432 |
+| Frames decoded | 349-404 (81-88%) | v26g: 404, v27d revert: 349 |
+| IDR keyframes | 30-35 (~1.5/sec from GOP) | v26g: 35, v27d: 30 |
 | Average bitrate | ~7 Mbps | v26g bridge output |
 | SD card writes | 0 bytes | 0-byte MOV file, SD usage unchanged |
 | Frame loss source | Single-slot shared memory overwrite | ~8 frames/sec lost between PTP polls |
 
 ## What Needs to Happen Next
 
-1. **Code cleanup**: Remove unused debug functions (spy_idr_capture, spy_msg5_debug statics). Evaluate whether spy_take_sem_short is still needed with +0x80 approach.
-2. **Frame loss reduction**: The ring buffer already stores all 30fps frames. Reading sequentially from the ring buffer instead of using single-slot shared memory could eliminate the ~8fps loss.
+1. **Code cleanup**: Remove unused debug functions (spy_idr_capture, spy_msg5_debug statics). Remove leftover DryOS queue defines from webcam.c. Evaluate whether spy_take_sem_short is still needed with +0x80 approach.
+2. **Frame loss reduction**: The ring buffer already stores all 30fps frames. Reading sequentially from the ring buffer instead of using single-slot shared memory could eliminate the ~8fps loss. DryOS message queues are not viable (proven fact #10). Alternative approaches: reduce msleep(10) polling interval, or use a multi-slot ring buffer with indices stored in BSS (not shared memory).
 3. **Virtual webcam integration**: Connect the H.264 decode output to a DirectShow virtual webcam filter for use in video conferencing apps.

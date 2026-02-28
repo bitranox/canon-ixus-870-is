@@ -2120,3 +2120,48 @@ Also identified descriptor overwrite bug: when PostMessageQueue returns 9 (full)
 **Key insight**: Queue depth must not exceed VRAM ring buffer depth. The seqlock worked because it had zero buffering — memcpy happened immediately at poll time, while VRAM data was still valid.
 
 **Next step**: Reduce queue depth to 2, use 4 descriptor slots (2x queue depth prevents in-queue descriptor overwrite), always advance wr_idx even on failed post.
+
+### v27b — Reduced Queue Depth (worse)
+
+**Approach**: Reduced queue depth from 8 to 2, descriptor ring from 8 to 4. Always advance wr_idx even on failed post.
+
+**Result**: 35 frames in 20s, 568 drops. WORSE than v27a (56 frames). Disproved the stale VRAM hypothesis as the primary issue.
+
+### v27c — Hybrid Seqlock + TryPostMessageQueue (worse)
+
+**Approach**: Reverted to seqlock data delivery (proven at 22fps). Added TryPostMessageQueue (0xFF82729C, non-blocking, 2 args) for wakeup notification. Consumer uses ReceiveMessageQueue to block until notified, then reads seqlock.
+
+**Key discovery**: PostMessageQueue (0xFF8271E4) with flags=0 means "wait forever" — it BLOCKS the recording pipeline when the queue is full. TryPostMessageQueue (0xFF82729C) is the correct non-blocking alternative (2 args, no timeout).
+
+**Iterations**:
+- Single seqlock attempt after wakeup: 21 frames, 585 drops
+- Added debug queue "DBG!" magic validation: 32 frames, 586 drops
+- 10 retries with msleep(1): 28 frames, 567 drops
+- 100 retries with msleep(1): build failed (brace mismatch), fixed
+- v26g-matching msleep(10) + queue wakeup on first poll: 25 frames, 525 drops
+
+All iterations were far worse than v26g baseline (404 frames).
+
+### v27d — Pure v26g Revert (baseline confirmation)
+
+**Approach**: Stripped ALL queue code from both movie_rec.c and webcam.c to isolate whether the queue infrastructure itself was the problem. Seqlock reader matches v26g exactly (100 polls × msleep(10)).
+
+**Iteration 1** — Queue removed from movie_rec.c but still created in webcam.c:
+- Result: 62 frames, 473 drops. Still broken.
+- This proved the queue CREATION (not notification) was the problem.
+
+**Iteration 2** — Queue creation removed from webcam.c too (pure v26g):
+- Result: 349 decoded / 432 produced (81%). Camera recorded full 20s.
+- Back near v26g baseline (404/457 = 88%).
+
+```
+[Stats] FPS: 23.2 | Recv: 47 | Drop: 9
+[Stats] FPS: 61.7 | Recv: 125 | Drop: 20
+[Stats] FPS: 19.0 | Recv: 38 | Drop: 18
+[Stats] FPS: 51.8 | Recv: 105 | Drop: 18
+Total: 349 decoded, 202 drops, 432 unique, 30 IDRs
+```
+
+**Root cause**: `call_func_ptr(FW_CreateMessageQueue, ...)` itself interferes with the recording pipeline. The DryOS queue allocation likely affects memory regions or kernel state that the JPCORE DMA or recording pipeline depends on. Even without using the queue for notifications, merely creating it caused frame delivery to drop from 404 to 62.
+
+**Conclusion**: DryOS message queues are NOT viable for this use case. The seqlock at 0xFF000 with msleep(10) polling remains the best working approach. Future improvements should avoid calling DryOS allocation functions (CreateMessageQueue, CreateSemaphore) from the webcam module context.
