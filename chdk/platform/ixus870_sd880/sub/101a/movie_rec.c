@@ -119,22 +119,19 @@ static int __attribute__((used,noinline)) spy_take_sem_short(int sem, int timeou
     }
 }
 
-// Deliver H.264 frame to webcam module via seqlock + DryOS queue notification.
+// Deliver H.264 frame to webcam module via seqlock protocol.
 // Called from sub_FF85D98C_my after sub_FF92FE8C returns each encoded frame.
 // Invalidates CPU cache for the frame data (JPCORE DMA bypasses cache).
 //
 // Data delivery uses seqlock protocol in shared memory (proven working at
-// 22fps in v26g).  Additionally, TryPostMessageQueue sends a non-blocking
-// notification to wake the consumer instantly (replacing msleep polling).
-// TryPostMessageQueue never blocks — if the queue is full, the notification
-// is silently dropped, but the seqlock data is still valid for the next read.
+// 22fps in v26g).  DryOS kernel signaling (semaphores, message queues) is
+// NOT viable — causes context switches that starve the recording pipeline.
 //
 // Shared memory layout at 0x000FF000:
 //   [0] magic    = 0x52455753 when active (set by webcam.c)
 //   [1] ptr      = frame data pointer (set by writer, seqlock)
 //   [2] size     = frame data size (set by writer, seqlock)
 //   [3] seq      = sequence counter (odd=writing, even=stable)
-//   [4] queue    = DryOS message queue handle (set by webcam.c)
 //   [8] dbg_wr   = debug queue write index
 //   [9] dbg_rd   = debug queue read index
 

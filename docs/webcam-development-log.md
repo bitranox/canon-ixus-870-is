@@ -2194,3 +2194,36 @@ Total: 349 decoded, 202 drops, 432 unique, 30 IDRs
 **Best result**: msleep(10) wait + msleep(1) after detection: 491 produced / 386 decoded. Camera produced MORE frames (491 vs 457) but delivery rate slightly lower (79% vs 88%). Absolute decoded count is similar to baseline (386 vs 404).
 
 **Conclusion**: The msleep(10)/msleep(1) hybrid is roughly equivalent to dual msleep(10). The real bottleneck is the single-slot seqlock architecture — regardless of polling speed, frames get overwritten between PTP polls. Reducing msleep doesn't fundamentally change throughput because the seqlock can only hold one frame at a time.
+
+## v29a — DryOS Binary Semaphore Wakeup (2026-02-28)
+
+**Goal**: Replace msleep(10) polling with DryOS binary semaphore for instant wakeup. TakeSemaphore blocks the PTP task until GiveSemaphore fires from spy_ring_write, eliminating polling overhead.
+
+**Rationale for trying (despite message queue failure in v27)**:
+- `CreateBinarySemaphore` is stubbed (0xFF827348) — called directly, no `call_func_ptr`
+- Already proven in CHDK modules — `scrdump.c` calls CreateBinarySemaphore directly
+- All 4 semaphore functions exported to modules in `module_exportlist.c`
+- `GiveSemaphore` already works from movie_rec.c — `spy_take_sem_short` calls TakeSemaphore via function pointer successfully
+- Simpler kernel object than message queue (binary 0/1 flag vs buffer + pointers)
+
+**Implementation**:
+- **webcam.c**: CreateBinarySemaphore("WcamF", 0) before recording starts, handle stored in spy[4]. capture_frame_h264 uses TakeSemaphore(frame_sem, 33) instead of msleep(10). DeleteSemaphore in webcam_stop.
+- **movie_rec.c**: spy_ring_write reads hdr[4] once (cached), calls GiveSemaphore(cached_sem) after seqlock write. Range-validated handle (0 < h < 256).
+
+**Bridge output**:
+```
+UNIQUE #1 (cam#1, 48848 bytes): NAL=0x65 (type 5) — IDR
+UNIQUE #2-#10 (cam#2-10): NAL=0x61 (type 1) — P-frames
+IDR #3 (cam#19)
+[Stats] FPS: 0.0 | Recv: 0 | Drop: 26-30 | Skip: 0 | no frame (gf_rc=-1)
+... (all 9 stat lines show gf_rc=-1)
+Received: 11 frames, Dropped: 262, Camera produced: ~20 frames
+```
+
+**Result**: Severe regression. Camera produced only 20 frames in 20 seconds (~1fps vs ~491 at 30fps baseline). First ~10 unique frames came through quickly, then delivery completely stalled. Camera appeared to record normally (no crash, no LCD errors), but the pipeline was severely throttled.
+
+**Analysis**: Same failure pattern as CreateMessageQueue (v27a-v27d). GiveSemaphore from spy_ring_write likely triggers an immediate DryOS context switch to the PTP task (which is blocked on TakeSemaphore), preempting movie_record_task. The recording pipeline starves because the producer (msg 6 handler) never gets CPU time to process subsequent frames.
+
+**Conclusion**: Any DryOS kernel signaling from movie_record_task disrupts the recording pipeline — both message queues and binary semaphores cause the same catastrophic throughput drop. The msleep(10) polling approach is the only viable frame delivery mechanism. Reverted to v28a baseline.
+
+**Action**: Revert webcam.c and movie_rec.c to v28a (seqlock + msleep polling).

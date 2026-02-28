@@ -156,11 +156,12 @@ Our patch accepts STATE 3 or 4 (original firmware only accepts 4).
 **Evidence**: Replacing sub_FF9300B4 with minimal bookkeeping (read pointer, frame counter, cumulative offset) → encoder stalls after 3-4 frames. Adding full bookkeeping (+0x64, +0x60, +0x148/+0x14C, +0x150/+0x154, wrap-around) → same stall. Skipping the SD pipeline entirely (sub_FF8EDBE0, TakeSemaphore, sub_FF8EDC88) → crash or stall.
 **Cause**: sub_FF9300B4 handles undocumented internal state (sample tables, flush logic) that the H.264 encoder feedback loop depends on. The recording pipeline is tightly coupled — all components must run.
 
-### 10. DryOS CreateMessageQueue breaks the recording pipeline
-**Evidence**: Calling `CreateMessageQueue` via `call_func_ptr` in webcam.c (even without using the queue for notification) caused frame delivery to drop from 404 to 62. Removing the queue creation restored performance to 349 (within normal variance of v26g's 404).
-**Tested**: v27a (pure queue delivery: 56 frames), v27b (reduced depth: 35), v27c (hybrid seqlock+queue: 21-32), v27d with queue creation only (62), v27d without queue (349).
-**Cause**: The DryOS queue allocation likely affects memory regions or kernel state that JPCORE DMA or the recording pipeline depends on. The `call_func_ptr` call to firmware allocation functions from CHDK module context is not safe during active recording.
-**Implication**: Cannot use DryOS message queues (or likely semaphores/other kernel objects created at runtime) for webcam frame delivery. Must use the seqlock approach with polling.
+### 10. DryOS kernel signaling from movie_record_task breaks the recording pipeline
+**Evidence**: Both DryOS message queues and binary semaphores cause catastrophic throughput drops when used to signal from spy_ring_write (movie_record_task context) to the PTP task.
+- **Message queues** (v27a-v27d): CreateMessageQueue via call_func_ptr → 21-62 frames (vs 404 baseline). Even creating the queue without using it dropped to 62.
+- **Binary semaphores** (v29a): CreateBinarySemaphore (stubbed, direct call) + GiveSemaphore from spy_ring_write → 20 frames in 20s (~1fps). Camera appeared normal but pipeline was severely throttled.
+**Cause**: GiveSemaphore/TryPostMessageQueue from spy_ring_write triggers an immediate DryOS context switch to the PTP task (blocked on TakeSemaphore/ReceiveMessageQueue), preempting movie_record_task. The recording pipeline starves.
+**Implication**: Cannot use any DryOS kernel signaling mechanism (queues, semaphores) from the recording pipeline for webcam frame delivery. Must use the seqlock approach with msleep(10) polling.
 
 ### 11. CPU cache protects shared memory from DMA corruption
 **Evidence**: Uncached reads via 0x400FF000 → 26 decoded / 83 produced (seqlock reads garbage). Cached reads via 0x000FF000 → 349-404 decoded. spy_ring_write writes to cache, webcam.c reads from same cache (single-core ARM926).

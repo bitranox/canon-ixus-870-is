@@ -1,15 +1,13 @@
 // CHDK Webcam Module
 // Switches camera to video mode and starts H.264 recording.
 // Intercepts encoded frames from the recording pipeline via a seqlock
-// in shared memory + DryOS message queue notification, available over
-// PTP to a PC bridge.
+// in shared memory, available over PTP to a PC bridge.
 //
 // movie_rec.c hooks spy_ring_write into sub_FF85D98C_my after each
 // encoded frame.  spy_ring_write invalidates the CPU data cache for the
 // frame data (JPCORE DMA bypasses cache), stores {ptr, size} via seqlock
-// at 0xFF000, and sends a non-blocking notification via TryPostMessageQueue.
-// capture_frame_h264() blocks on ReceiveMessageQueue until notified, then
-// reads the seqlock for the latest frame data.
+// at 0xFF000.  capture_frame_h264() polls the seqlock with msleep(10)
+// to yield the CPU to DryOS, then reads the latest frame data.
 //
 // On the first capture call, the IDR keyframe is read directly from the
 // ring buffer's +0xC0 pointer (which persists throughout recording) and
@@ -70,37 +68,29 @@ static int idr_injected = 0;
 // contains SPS/PPS — Canon stores it only in the MOV container metadata.
 
 // ============================================================
-// Shared memory: seqlock data + DryOS queue wakeup
+// Shared memory: seqlock data + msleep polling
 // Data delivery uses seqlock protocol (proven at 22fps).
-// DryOS message queue provides instant wakeup notification
-// (replaces msleep(10) polling for lower latency).
+// msleep(10) yields CPU to DryOS scheduler so movie_record_task
+// can run spy_ring_write.  DryOS kernel signaling (semaphores,
+// message queues) is NOT viable — causes context switches that
+// starve the recording pipeline (proven facts #10).
 // ============================================================
 #define WEBCAM_SPY_ADDR    ((volatile unsigned int *)0x000FF000)
 // spy[0] = magic    (0x52455753 = active, set by webcam.c)
 // spy[1] = ptr      (frame data pointer, set by movie_rec.c, seqlock)
 // spy[2] = size     (frame data size, set by movie_rec.c, seqlock)
 // spy[3] = seq      (sequence counter: odd=writing, even=stable)
-// spy[4] = queue    (DryOS message queue handle, set by webcam.c)
 // spy[8] = dbg_wr   (debug queue write index)
 // spy[9] = dbg_rd   (debug queue read index)
-
-// DryOS message queue firmware functions (not stubbed in CHDK)
-#define FW_CreateMessageQueue      ((void *)0xFF826F84)
-#define FW_DeleteMessageQueue      ((void *)0xFF827008)
-#define FW_ReceiveMessageQueue     ((void *)0xFF827098)
-#define FW_TryReceiveMessageQueue  ((void *)0xFF827160)
-
-static int frame_queue = 0;  // DryOS message queue handle
 
 // ============================================================
 // H.264 frame capture from recording spy buffer
 // ============================================================
 
-// Capture an H.264 encoded frame via seqlock + DryOS queue wakeup.
+// Capture an H.264 encoded frame via seqlock + msleep polling.
 // movie_rec.c's spy_ring_write() stores frame ptr/size via seqlock at
-// 0xFF000 and sends a non-blocking notification via TryPostMessageQueue.
-// We call ReceiveMessageQueue to block until notified (up to 100ms),
-// then drain extra notifications and read the seqlock for latest data.
+// 0xFF000.  We poll with msleep(10) to yield the CPU so movie_record_task
+// can run, then read the seqlock for latest data.
 //
 // The data is H.264 NAL units in AVCC format (4-byte big-endian
 // length prefix, as used in MOV containers).
