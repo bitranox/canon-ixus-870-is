@@ -126,15 +126,19 @@ static int __attribute__((used,noinline)) spy_take_sem_short(int sem, int timeou
 // NOT viable — causes context switches that starve the recording pipeline.
 //
 // Shared memory layout at 0x000FF000:
-//   [0]  magic    = 0x52455753 when active (set by webcam.c)
-//   [1]  ptr      = frame data pointer (set by writer, seqlock)
-//   [2]  size     = frame data size (set by writer, seqlock)
-//   [3]  seq      = sequence counter (odd=writing, even=stable)
-//   [4]  idr_ptr  = IDR frame pointer (IDR-only seqlock, set by writer)
-//   [5]  idr_size = IDR frame size (IDR-only seqlock, set by writer)
-//   [6]  idr_seq  = IDR sequence counter (odd=writing, even=stable)
-//   [12] dbg_wr   = debug queue write index
-//   [13] dbg_rd   = debug queue read index
+//   [0]  magic      = 0x52455753 when active (set by webcam.c)
+//   [1]  slot_a_ptr = frame data pointer (dual-slot seqlock, slot A)
+//   [2]  slot_a_sz  = frame data size (slot A)
+//   [3]  slot_a_seq = sequence counter (odd=writing, even=stable, slot A)
+//   [4]  slot_b_ptr = frame data pointer (dual-slot seqlock, slot B)
+//   [5]  slot_b_sz  = frame data size (slot B)
+//   [6]  slot_b_seq = sequence counter (odd=writing, even=stable, slot B)
+//   [12] dbg_wr     = debug queue write index
+//   [13] dbg_rd     = debug queue read index
+//
+// Producer alternates: frame 1→A, frame 2→B, frame 3→A, ...
+// This doubles the buffer so two frames arriving during one bridge
+// PTP round-trip go to different slots — neither is lost.
 
 static void __attribute__((used,noinline)) spy_ring_write(unsigned char *ptr, unsigned int size)
 {
@@ -162,18 +166,25 @@ static void __attribute__((used,noinline)) spy_ring_write(unsigned char *ptr, un
         // it skips the write but still updates the consumed pointer.
         *(volatile unsigned int *)0x89E8 = 0;
 
-        hdr[3]++;
-        hdr[1] = (unsigned int)ptr;
-        hdr[2] = size;
-        hdr[3]++;
-
-        // IDR priority seqlock: store latest IDR in hdr[4..6] so P-frames
-        // cannot overwrite it. Updated only on IDR frames (~2.5/sec).
-        if (size >= 5 && (ptr[4] & 0x1F) == 5) {
-            hdr[6]++;
-            hdr[4] = (unsigned int)ptr;
-            hdr[5] = size;
-            hdr[6]++;
+        // Dual-slot seqlock: alternate between slot A (hdr[1..3]) and
+        // slot B (hdr[4..6]). At 30fps the camera produces a frame every
+        // ~33ms but bridge PTP round-trip is ~36ms, so two frames often
+        // arrive during one poll cycle. With one slot the older frame is
+        // lost; with two slots they go to different slots and both survive.
+        {
+            static int slot = 0;
+            if (slot == 0) {
+                hdr[3]++;
+                hdr[1] = (unsigned int)ptr;
+                hdr[2] = size;
+                hdr[3]++;
+            } else {
+                hdr[6]++;
+                hdr[4] = (unsigned int)ptr;
+                hdr[5] = size;
+                hdr[6]++;
+            }
+            slot ^= 1;
         }
     }
 }

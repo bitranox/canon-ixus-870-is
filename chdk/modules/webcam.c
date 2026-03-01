@@ -76,19 +76,19 @@ static int idr_injected = 0;
 // starve the recording pipeline (proven facts #10).
 // ============================================================
 #define WEBCAM_SPY_ADDR    ((volatile unsigned int *)0x000FF000)
-// spy[0]  = magic    (0x52455753 = active, set by webcam.c)
-// spy[1]  = ptr      (frame data pointer, set by movie_rec.c, seqlock)
-// spy[2]  = size     (frame data size, set by movie_rec.c, seqlock)
-// spy[3]  = seq      (sequence counter: odd=writing, even=stable)
-// spy[4]  = idr_ptr  (IDR frame pointer, IDR-only seqlock, set by movie_rec.c)
-// spy[5]  = idr_size (IDR frame size, IDR-only seqlock, set by movie_rec.c)
-// spy[6]  = idr_seq  (IDR sequence counter: odd=writing, even=stable)
-// spy[12] = dbg_wr   (debug queue write index)
-// spy[13] = dbg_rd   (debug queue read index)
+// spy[0]  = magic      (0x52455753 = active, set by webcam.c)
+// spy[1]  = slot_a_ptr (frame data pointer, dual-slot seqlock, slot A)
+// spy[2]  = slot_a_sz  (frame data size, slot A)
+// spy[3]  = slot_a_seq (sequence counter: odd=writing, even=stable, slot A)
+// spy[4]  = slot_b_ptr (frame data pointer, dual-slot seqlock, slot B)
+// spy[5]  = slot_b_sz  (frame data size, slot B)
+// spy[6]  = slot_b_seq (sequence counter: odd=writing, even=stable, slot B)
+// spy[12] = dbg_wr     (debug queue write index)
+// spy[13] = dbg_rd     (debug queue read index)
 
-// Seqlock tracking (module-level for persistence across capture calls)
-static unsigned int last_seq = 0;      // last seen main seqlock sequence
-static unsigned int last_idr_seq = 0;  // last seen IDR seqlock sequence
+// Dual-slot seqlock tracking (module-level for persistence across capture calls)
+static unsigned int last_seq_a = 0;    // last seen slot A sequence
+static unsigned int last_seq_b = 0;    // last seen slot B sequence
 
 // ============================================================
 // H.264 frame capture from recording spy buffer
@@ -252,69 +252,63 @@ static int capture_frame_h264(void)
         }
     }
 
-    // IDR priority: check hdr[4..6] for a new IDR we haven't sent yet.
-    // This seqlock is only updated on IDR frames (~2.5/sec), so P-frames
-    // cannot overwrite it. Catches IDRs that the main seqlock missed.
+    // Dual-slot seqlock polling.
+    // Producer alternates frames between slot A (hdr[1..3]) and slot B (hdr[4..6]).
+    // Check both slots each iteration; prefer the older unseen frame (lower seq)
+    // to maintain H.264 decode chain ordering.
+    // msleep(10) yields CPU to DryOS so movie_record_task can run spy_ring_write.
     {
         int got_frame = 0;
+        int polls;
 
-        {
-            unsigned int idr_seq = hdr[6];
-            if (!(idr_seq & 1) && idr_seq != last_idr_seq && idr_seq != 0) {
-                unsigned char *idr_ptr = (unsigned char *)hdr[4];
-                unsigned int idr_size = hdr[5];
-                unsigned int idr_seq2 = hdr[6];
-                if (idr_seq == idr_seq2 && idr_ptr && idr_size > 0 && idr_size <= SPY_BUF_SIZE) {
-                    memcpy(frame_data_buf, idr_ptr, idr_size);
-                    // Validate: NAL type must still be IDR (type 5).
-                    // Ring buffer may have recycled, overwriting IDR with P-frame.
-                    if (idr_size >= 5 && (frame_data_buf[4] & 0x1F) == 5) {
-                        size = idr_size;
-                        last_seq = hdr[3] & ~1u;  // skip stale P-frames
+        for (polls = 0; polls < 100 && !got_frame; polls++) {
+            unsigned int seq_a = hdr[3];
+            unsigned int seq_b = hdr[6];
+            int new_a = !(seq_a & 1) && seq_a != last_seq_a && seq_a != 0;
+            int new_b = !(seq_b & 1) && seq_b != last_seq_b && seq_b != 0;
+
+            if (!new_a && !new_b) {
+                msleep(10);
+                continue;
+            }
+
+            // Yield CPU so movie_record_task stays scheduled.
+            msleep(1);
+
+            // Try older frame first (lower seq = written earlier).
+            // Note: sz is the ring buffer chunk size (256KB), not encoded frame size.
+            // Clamp to SPY_BUF_SIZE; AVCC parser below trims to actual NAL size.
+            if (new_a && (!new_b || seq_a <= seq_b)) {
+                unsigned char *src = (unsigned char *)hdr[1];
+                unsigned int sz = hdr[2];
+                if (src && sz > 0) {
+                    if (sz > SPY_BUF_SIZE) sz = SPY_BUF_SIZE;
+                    memcpy(frame_data_buf, src, sz);
+                    if (hdr[3] == seq_a) {
+                        size = sz;
+                        last_seq_a = seq_a;
                         got_frame = 1;
                     }
                 }
-                last_idr_seq = idr_seq;  // mark as seen even if validation failed
             }
+
+            if (!got_frame && new_b) {
+                unsigned char *src = (unsigned char *)hdr[4];
+                unsigned int sz = hdr[5];
+                if (src && sz > 0) {
+                    if (sz > SPY_BUF_SIZE) sz = SPY_BUF_SIZE;
+                    memcpy(frame_data_buf, src, sz);
+                    if (hdr[6] == seq_b) {
+                        size = sz;
+                        last_seq_b = seq_b;
+                        got_frame = 1;
+                    }
+                }
+            }
+            // If verification failed on both, retry next iteration
         }
 
-        // Normal seqlock polling (falls through if IDR priority didn't fire).
-        // msleep(10) yields CPU to DryOS so spy_ring_write (in movie_record_task)
-        // gets scheduled. On single-core ARM926, cache is coherent — spy_ring_write
-        // writes hdr[1..3] to the CPU cache, we read from the same cache.
-        if (!got_frame) {
-            int polls;
-            for (polls = 0; polls < 100; polls++) {
-                unsigned int seq_before, seq_after;
-                unsigned char *src_ptr;
-
-                seq_before = hdr[3];
-
-                // Skip if write in progress (odd) or no new data (unchanged)
-                if ((seq_before & 1) || seq_before == last_seq) {
-                    msleep(10);
-                    continue;
-                }
-
-                // Frame ready. Minimal yield so recording pipeline stays scheduled.
-                msleep(1);
-                src_ptr = (unsigned char *)hdr[1];
-                size = hdr[2];
-                if (!src_ptr || size == 0) continue;
-                if (size > SPY_BUF_SIZE) size = SPY_BUF_SIZE;
-
-                memcpy(frame_data_buf, src_ptr, size);
-
-                seq_after = hdr[3];
-                if (seq_before == seq_after) {
-                    last_seq = seq_before;
-                    got_frame = 1;
-                    break;  // Consistent copy
-                }
-                // Seq changed during copy — frame overwritten, retry
-            }
-            if (!got_frame) return 0;
-        }
+        if (!got_frame) return 0;
     }
 
     // Parse AVCC NAL units to determine actual H.264 frame size.
@@ -478,8 +472,8 @@ static int webcam_start(int jpeg_quality)
     }
 
     // Reset seqlock tracking for new session
-    last_seq = 0;
-    last_idr_seq = 0;
+    last_seq_a = 0;
+    last_seq_b = 0;
 
     // Start video recording via the firmware's CtrlSrv event system.
     // UIFS_StartMovieRecord posts event 0x9A1 — CtrlSrv processes it

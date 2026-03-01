@@ -235,7 +235,8 @@ sub_FF85D98C_my (msg 6 handler)
     ▼
 spy_ring_write
     │ invalidates CPU cache for frame data (JPCORE DMA bypasses cache)
-    │ stores {ptr, size} via seqlock at 0xFF000 (hdr[1..3])
+    │ stores {ptr, size} via dual-slot seqlock at 0xFF000
+    │ (alternates hdr[1..3] / hdr[4..6] per frame)
     │ clears +0x80 (is_open) at 0x89E8 → prevents SD file writes
     ▼
 JPCORE encode pipeline (runs unmodified)
@@ -258,15 +259,15 @@ PTP USB transfer → bridge → FFmpeg decode → virtual webcam
 
 | Metric | Value | Evidence |
 |--------|-------|----------|
-| Frames produced | ~245 in 10s (~24.5 fps) | v31c bridge output (full 10s session) |
-| Frames decoded | 226 (96.2%) | v31c: 226/235 unique frames decoded |
-| Decoded FPS | 22.6 fps | v31c: measured first-to-last frame |
-| Total FPS (incl. drops) | 28.1 fps | v31c bridge output |
-| IDR keyframes | 20 in 10s (~2/sec, GOP ~12) | v31c bridge output |
-| Average bitrate | ~8 Mbps | v31c bridge output |
+| Frames produced | ~462 in 20s (~23 fps) | v32b bridge output (full 20s session) |
+| Frames decoded | 436/441 (98.9%) | v32b: 441 unique frames, 436 decoded OK |
+| Decoded FPS | 21.8 fps | v32b: measured first-to-last frame |
+| Total FPS (incl. drops) | 30.0 fps | v32b bridge output |
+| IDR keyframes | 40 in 20s (~2/sec, GOP ~11) | v32b bridge output |
+| Average bitrate | ~7-8 Mbps | v32b bridge output |
 | SD card writes | 0 bytes | 0-byte MOV file, SD usage unchanged |
-| Max decode streak | 210 frames (cam#2-cam#219) | v31c: ~8.4s unbroken decode |
-| Frame loss source | Skipped P-frames break decode chain until next IDR | v32: 439/460 received (95.4%), but 21 skipped frames cause 126 decode failures |
+| Max decode streak | 221 frames (cam#231-cam#462) | v32b: ~8.8s unbroken decode |
+| Frame loss source | Polling rate vs production rate mismatch; dual-slot seqlock reduces this to <1% | v32b: 441/462 frames (95.5% capture), 436/441 decoded (98.9%). Dual-slot delivers 40 IDRs vs 25 with single-slot |
 
 ### 17. Original TakeSemaphore timeout (1000ms) is correct for webcam
 
@@ -274,12 +275,18 @@ PTP USB transfer → bridge → FFmpeg decode → virtual webcam
 **Mechanism**: JPCORE hardware encode completes in ~1-5ms. The 1000ms timeout never fires during normal operation. The 50ms timeout occasionally fired when JPCORE was slow (e.g. IDR frames), returning fake success while [SP,#0x38] was still non-zero. Even with error path bypass, the corrupted JPCORE state caused pipeline instability.
 **Implication**: spy_take_sem_short is now a simple passthrough. The error path bypass (proven fact #16) remains as a safety net but should rarely fire with 1000ms timeout.
 
-### 18. IDR frames are NOT lost to seqlock overwrites
+### 18. IDR frames ARE lost to single-slot seqlock overwrites
 
-**Evidence**: v32 added a second seqlock (hdr[4..6]) updated only on IDR frames. Result: still 25 IDRs in 20s — identical to v31c without the IDR seqlock. Zero additional IDRs recovered.
-**Implication**: The original hypothesis (P-frames overwriting IDRs before bridge polls) was wrong. The camera produces ~1.25 IDRs/sec in 20s tests. All produced IDRs reach the bridge. Decode failures come from skipped P-frames (21/460 = 4.6% frame loss) breaking the H.264 reference chain — each skip causes ~17 consecutive decode failures until the next IDR.
+**Evidence**: v32 added IDR-only seqlock (hdr[4..6]) — still 25 IDRs (no improvement, wrong approach). v32b replaced with dual-slot alternating seqlock (producer alternates all frames between slot A and B) — **40 IDRs in 20s** (vs 25 with single-slot). 98.9% decode rate vs 67.9%.
+**Cause**: Single-slot seqlock holds only 1 frame. At 30fps (33ms interval) with ~36ms PTP round-trip, 2 frames often arrive per poll. The older frame (which may be an IDR) is overwritten by the newer P-frame. The IDR-only seqlock (v32) didn't help because it preserved IDRs but still lost P-frames, breaking decode chains.
+**Implication**: Dual-slot seqlock is the correct solution. Both IDR and P-frame preservation matter for H.264 decode chain integrity.
+
+### 19. MovieFrameGetter returns chunk size (256KB), not encoded frame size
+
+**Evidence**: v32b debug frames show FSIZ=0x40000 (262144) for every frame. The `size` parameter from sub_FF92FE8C ([SP,#0x30]) is the ring buffer chunk allocation size, not the actual H.264 encoded size (~35-46KB). Changing the consumer from `sz <= SPY_BUF_SIZE` (reject >64KB) to `sz = min(sz, SPY_BUF_SIZE)` (clamp to 64KB) fixed the regression. The AVCC parser after memcpy determines actual frame size from 4-byte BE length prefixes.
+**Implication**: Always clamp frame size to SPY_BUF_SIZE, never reject. The AVCC parser is the authoritative source of frame boundaries.
 
 ## What Needs to Happen Next
 
-1. **Reduce P-frame skipping**: 4.6% frame loss causes 28.7% decode failure due to chain breaks. Options: (a) reduce PTP poll latency, (b) increase camera IDR frequency (shorter GOP → smaller damage per skip), (c) bridge-side error recovery requesting IDR re-send.
+1. **Optimize memcpy size**: Currently copying 64KB per frame (ring buffer chunk size) instead of actual ~42KB encoded size. Reducing this could improve throughput from ~23fps to closer to 30fps.
 2. **Virtual webcam integration**: Connect the H.264 decode output to a DirectShow virtual webcam filter for use in video conferencing apps.

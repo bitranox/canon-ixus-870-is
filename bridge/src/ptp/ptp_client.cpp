@@ -952,6 +952,58 @@ bool PTPClient::read_memory(uint32_t address, uint32_t size, std::vector<uint8_t
     return (resp.code == PTP_RC_OK && !data.empty());
 }
 
+bool PTPClient::upload_file(const std::string& remote_path, const std::vector<uint8_t>& data) {
+    // CHDK UploadFile protocol:
+    // Command: opcode=0x9999, param1=CHDK_UploadFile
+    // Data phase: [4-byte path_len][path bytes (no null)][file data]
+    uint32_t path_len = static_cast<uint32_t>(remote_path.size());
+    uint32_t params[5] = { CHDK_UploadFile, 0, 0, 0, 0 };
+
+    // Build data packet: PTP header + 4-byte path_len + path + file data
+    int payload_size = 4 + static_cast<int>(path_len) + static_cast<int>(data.size());
+    int data_total = PTP_HEADER_SIZE + payload_size;
+    std::vector<uint8_t> pkt(data_total);
+
+    uint32_t pkt_len = static_cast<uint32_t>(data_total);
+    memcpy(pkt.data() + 0, &pkt_len, 4);
+    uint16_t type = PTP_TYPE_DATA;
+    memcpy(pkt.data() + 4, &type, 2);
+    uint16_t opcode = PTP_OC_CHDK;
+    memcpy(pkt.data() + 6, &opcode, 2);
+    uint32_t tid = impl_->transaction_id + 1;
+    memcpy(pkt.data() + 8, &tid, 4);
+    // Payload: 4-byte LE path length + path string + file data
+    memcpy(pkt.data() + PTP_HEADER_SIZE, &path_len, 4);
+    memcpy(pkt.data() + PTP_HEADER_SIZE + 4, remote_path.data(), path_len);
+    if (!data.empty())
+        memcpy(pkt.data() + PTP_HEADER_SIZE + 4 + path_len, data.data(), data.size());
+
+    // Send command
+    if (!impl_->send_command(PTP_OC_CHDK, params, 1)) {
+        impl_->last_error = "upload_file: send_command failed";
+        return false;
+    }
+
+    // Send data (may be large, use longer timeout)
+    int transferred = 0;
+    int r = libusb_bulk_transfer(impl_->handle, impl_->ep_out,
+                                  pkt.data(), data_total, &transferred, 10000);
+    if (r < 0) {
+        impl_->last_error = "upload_file: bulk transfer failed: " +
+                            std::string(libusb_strerror(static_cast<libusb_error>(r)));
+        return false;
+    }
+
+    // Get response
+    PTPContainer resp{};
+    if (!impl_->receive_response(resp) || resp.code != PTP_RC_OK) {
+        impl_->last_error = "upload_file: camera rejected (code=" +
+                            std::to_string(resp.code) + ")";
+        return false;
+    }
+    return true;
+}
+
 std::string PTPClient::get_last_error() const {
     return impl_->last_error;
 }

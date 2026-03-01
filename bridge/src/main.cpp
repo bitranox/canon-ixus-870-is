@@ -109,6 +109,11 @@ static void print_debug_frame(const uint8_t* data, size_t size)
     }
 }
 
+struct UploadEntry {
+    std::string local_path;
+    std::string remote_path;
+};
+
 struct Options {
     int jpeg_quality = 50;
     int output_width = 1280;
@@ -122,6 +127,8 @@ struct Options {
     bool verbose = false;
     bool debug = false;
     int timeout_sec = 0;
+    std::vector<UploadEntry> uploads;
+    bool reboot = false;
 };
 
 // AVCC frame validation
@@ -185,6 +192,9 @@ static void print_usage(const char* prog) {
         "  --verbose           Show per-frame statistics\n"
         "  --debug             Per-frame CSV debug logging to stderr\n"
         "  --timeout N         Exit after N seconds (graceful shutdown)\n"
+        "  --upload LOCAL REMOTE  Upload file to camera SD card, then exit\n"
+        "                         (can be repeated; REMOTE uses A/ prefix for SD root)\n"
+        "  --reboot              Reboot camera (use after --upload to reload firmware)\n"
         "  --help              Show this help\n"
         "\n"
         "Prerequisites:\n"
@@ -222,6 +232,13 @@ static Options parse_args(int argc, char* argv[]) {
             opts.debug = true;
         } else if (arg == "--timeout" && i + 1 < argc) {
             opts.timeout_sec = atoi(argv[++i]);
+        } else if (arg == "--reboot") {
+            opts.reboot = true;
+        } else if (arg == "--upload" && i + 2 < argc) {
+            UploadEntry e;
+            e.local_path = argv[++i];
+            e.remote_path = argv[++i];
+            opts.uploads.push_back(e);
         } else if (arg == "--help") {
             print_usage(argv[0]);
             exit(0);
@@ -268,6 +285,54 @@ int main(int argc, char* argv[]) {
     auto info = client.get_camera_info();
     printf("Connected: %s\n", info.description.c_str());
     printf("CHDK protocol: %d.%d\n\n", info.chdk_major, info.chdk_minor);
+
+    // --- Upload mode: send files to camera and exit ---
+    if (!opts.uploads.empty()) {
+        int ok = 0, fail = 0;
+        for (const auto& u : opts.uploads) {
+            // Read local file
+            FILE* f = fopen(u.local_path.c_str(), "rb");
+            if (!f) {
+                fprintf(stderr, "ERROR: Cannot open local file: %s\n", u.local_path.c_str());
+                fail++;
+                continue;
+            }
+            fseek(f, 0, SEEK_END);
+            long fsize = ftell(f);
+            fseek(f, 0, SEEK_SET);
+            std::vector<uint8_t> data(fsize);
+            if (fsize > 0)
+                fread(data.data(), 1, fsize, f);
+            fclose(f);
+
+            printf("Uploading %s (%ld bytes) -> %s ... ",
+                   u.local_path.c_str(), fsize, u.remote_path.c_str());
+            fflush(stdout);
+
+            if (client.upload_file(u.remote_path, data)) {
+                printf("OK\n");
+                ok++;
+            } else {
+                printf("FAILED: %s\n", client.get_last_error().c_str());
+                fail++;
+            }
+        }
+        printf("\nUpload complete: %d OK, %d failed\n", ok, fail);
+        if (!opts.reboot) {
+            client.disconnect();
+            return fail > 0 ? 1 : 0;
+        }
+        // Fall through to reboot
+    }
+
+    if (opts.reboot) {
+        printf("Rebooting camera...\n");
+        client.execute_script("reboot()");
+        // Camera will disconnect immediately — don't wait for response
+        client.disconnect();
+        printf("Reboot command sent. Wait ~10 seconds for camera to restart.\n");
+        return 0;
+    }
 
     // --- Initialize frame processor ---
     webcam::FrameProcessor processor;

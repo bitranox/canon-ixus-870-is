@@ -2669,3 +2669,70 @@ v31c degrades from 96.2% (10s) to 67.9% (20s). Suspected cause: P-frames overwri
 - **Actual cause of decode failures**: 21 frames missed entirely (460 produced, 439 received). When a P-frame in a decode chain is skipped, all subsequent P-frames fail until the next IDR. 126 failures / ~17 frames per IDR interval ≈ 7-8 broken chains.
 - **The seqlock is not the bottleneck** — it delivers 439/460 frames (95.4%). The decode failures come from the ~5% of P-frames that are skipped, breaking the H.264 reference chain.
 - The real fix needs to either: (a) reduce frame skipping to near-zero, or (b) increase IDR frequency so chains break less, or (c) make the bridge request IDR re-delivery when decode fails.
+
+## v32b — Dual-Slot Seqlock + USB Deploy (2026-03-01)
+
+### Root Cause Analysis
+
+Detailed analysis of v32 bridge output disproved the IDR overwrite hypothesis. Drops are evenly distributed across all 20 seconds (3-11 per second), NOT concentrated at end. This is a steady-state polling rate vs production rate mismatch:
+- Camera produces frames every ~33ms (30fps)
+- Bridge PTP round-trip takes ~36ms
+- Single-slot seqlock: when 2 frames arrive during 1 round-trip, the older is overwritten → ~4-7 drops/sec consistently
+
+### Solution: Dual-Slot Alternating Seqlock
+
+Producer alternates frames between slot A (hdr[1..3]) and slot B (hdr[4..6]). Two frames arriving during one PTP round-trip go to different slots — neither is lost.
+
+### Changes
+- **movie_rec.c**: Replaced single seqlock + IDR seqlock with `static int slot` toggled via `slot ^= 1`. Frame N→slot A, frame N+1→slot B, etc.
+- **webcam.c**: Dual-slot consumer checks both slots each iteration, prefers older frame (lower seq) for H.264 decode chain ordering. Module-level `last_seq_a`/`last_seq_b` statics.
+- **Bridge**: Added `--upload` (PTP UploadFile) and `--reboot` (Lua `reboot()` via PTP ExecuteScript) to eliminate SD card swapping during development.
+
+### Bug: Size Clamp vs Reject
+
+First dual-slot test: severe regression (1 frame in 20s). Root cause: the `size` parameter from MovieFrameGetter (sub_FF92FE8C) is the ring buffer chunk size (0x40000 = 256KB), not the actual H.264 encoded frame size. The old single-slot code **clamped** to SPY_BUF_SIZE (64KB):
+```c
+if (size > SPY_BUF_SIZE) size = SPY_BUF_SIZE;  // clamp, then memcpy
+```
+The dual-slot code incorrectly **rejected** frames > 64KB:
+```c
+if (src && sz > 0 && sz <= SPY_BUF_SIZE)  // reject — never copies!
+```
+Fix: changed to clamp (`if (sz > SPY_BUF_SIZE) sz = SPY_BUF_SIZE`). The AVCC parser after memcpy determines actual frame size from NAL length prefixes.
+
+### 20s Test Results (with size clamp fix)
+```
+=== SESSION SUMMARY ===
+  Received: 436 frames
+  Decoded FPS: 21.8
+  Total FPS (incl. drops): 30.0
+  Camera produced: ~462 frames
+  Duration: 20.0 seconds
+=== DEBUG SUMMARY ===
+  PTP calls:    600 (441 success, 159 no-frame)
+  Decode:       441 attempts, 436 OK (98.9%), 5 FAIL
+  Decode errors: "Decoder needs more data": 5
+  NAL types:    IDR: 40, P-frame: 401, SEI: 0, other: 0
+  AVCC valid:   441/441 (100.0%)
+  Max streak:   221 (cam#231-cam#462)
+  USB errors:   send=0 recv=0 timeout=0 io=0
+  Frame sizes:  min=37980 max=64012 avg=42056
+```
+
+### Analysis — Major Improvement
+
+| Metric | v31c (20s) | v32 (20s) | **v32b (20s)** |
+|--------|-----------|-----------|----------------|
+| Decode rate | 67.9% | 71.3% | **98.9%** |
+| Frames received | 313/368 | 313/439 | **436/441** |
+| IDRs seen | 25 | 25 | **40** |
+| Max streak | 44 | 62 | **221** |
+| Decoded FPS | — | 15.6 | **21.8** |
+| Camera produced | ~389 | ~460 | ~462 |
+
+- **98.9% decode over 20 seconds** — massive improvement from 67.9%
+- **40 IDRs** (vs 25) — nearly all IDRs now captured, confirming the single-slot was losing them
+- **Max streak 221** consecutive decoded frames — 8.8 seconds unbroken, vs 1.8s (v31c)
+- Only 5 decode failures in entire 20s session
+- Camera produced fewer total frames (~462 vs ~600 expected at 30fps) — the 64KB memcpy per frame (instead of actual ~42KB) adds ~0.5ms overhead per frame, slightly slowing the consumer and thus the producer via pipeline backpressure
+- Camera recorded fine, clean shutdown, 0 USB errors
