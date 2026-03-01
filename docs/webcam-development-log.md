@@ -3123,3 +3123,65 @@ Reverted to exact v32d codebase, then added only the AVCC peek optimization (no 
 1. **AVCC peek improves FPS**: 30.1fps vs 28.2fps baseline — less memcpy = more CPU for pipeline
 2. **128KB multi_frame_buf malloc causes dark screen**: Confirmed by elimination. All v32f variants with multi_frame_buf had dark screen. v32g without it = no dark screen. DryOS heap exhaustion starves ISP/display/IS subsystems.
 3. **No display or IS motor issues**: Camera fully healthy with this build
+
+## v32h — Multi-Frame Batch Transfer (120KB buffer) (2026-03-01)
+
+### Goal
+
+When both seqlock slots have unseen frames, pack both into one PTP response to eliminate frame loss during RTT spikes. Replace the single 64KB `frame_data_buf` with 120KB — enough for two consecutive frames (~99% of the time based on v32g frame size distribution: min=32KB, avg=40KB, p75=41KB, max=65KB).
+
+### Changes (webcam.c only)
+
+1. **SPY_BUF_SIZE**: 65536 → `(120 * 1024)` (120KB)
+2. **Multi-frame batch path**: When both slots are unseen, sort by seq (oldest first), AVCC-peek + memcpy + seqlock-verify each frame, pack into multi-frame wire format `[u16 count=2][u32 size_a][frame_a][u32 size_b][frame_b]`, return as `WEBCAM_FMT_H264_MULTI`
+3. **Fallback**: If second frame fails (torn write, AVCC parse fail, doesn't fit), return first frame only as `WEBCAM_FMT_H264` via memcpy shift from offset 6 to 0
+4. **Single-frame path**: Unchanged from v32g when only one slot is unseen
+5. **Build fix**: `memmove` not available in CHDK module linker — replaced with `memcpy` (safe because dst < src, forward copy handles 6-byte overlap correctly)
+
+### 10-second test
+
+```
+=== SESSION SUMMARY ===
+  Received: 300 frames
+  Dropped:  0 (decode failures)
+  Skipped:  0 (camera-produced but never received)
+  Unique data: 300 frames
+  Last cam frame#: 309
+  Duration: 10.0 seconds
+  Decoded FPS: 30.0
+  Camera produced: ~309 frames
+=======================
+
+=== DEBUG SUMMARY ===
+  PTP calls:    1799 (from 60s)
+  Decode:       1799 OK (100.0%), 0 FAIL
+  AVCC valid:   1799/1799 (100.0%)
+  Max streak:   1799
+  PTP RTT:      min=3.3ms avg=29.8ms max=138.0ms
+  Frame sizes:  min=34820 max=71920 avg=41527
+=====================
+```
+
+MULTI batch=2 appeared 2 times in 10s test (3 times in 60s). Low batch rate is expected — with ~30ms RTT and 33ms frame interval, both slots being unseen simultaneously is rare. Batching acts as a safety net for RTT spikes.
+
+### 60-second stability test
+
+```
+=== SESSION SUMMARY ===
+  Received: 1799 frames
+  Dropped:  0 (decode failures)
+  Skipped:  0 (camera-produced but never received)
+  Unique data: 1799 frames
+  Last cam frame#: 1857
+  Duration: 60.0 seconds
+  Decoded FPS: 30.0
+  Camera produced: ~1857 frames
+=======================
+```
+
+### Key Findings
+
+1. **120KB heap allocation is safe**: No dark screen, no IS motor clicking, display normal throughout 60s. Safe threshold is somewhere between 120KB and 192KB (proven-unsafe).
+2. **Multi-frame batching works**: Bridge correctly unpacks H264_MULTI format, decodes both frames
+3. **Performance maintained**: 100% decode, 30.0fps, 0 errors — matches v32g baseline
+4. **Batch frequency is low**: ~3 batches per 60s. Frame loss from RTT spikes was already rare with dual-slot seqlock; batching provides marginal improvement as insurance

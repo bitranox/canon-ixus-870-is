@@ -254,7 +254,8 @@ webcam.c (CHDK module)
     │ polls dual-slot seqlock (100 × msleep(10))
     │ peeks AVCC headers from camera RAM to determine exact frame size
     │ memcpy only exact frame bytes (not full buffer)
-    │ returns single H.264 frame per PTP response
+    │ if both slots unseen: packs both frames into H264_MULTI response
+    │ otherwise: returns single H.264 frame per PTP response
     ▼
 PTP USB transfer → bridge → FFmpeg decode → virtual webcam
 ```
@@ -263,15 +264,15 @@ PTP USB transfer → bridge → FFmpeg decode → virtual webcam
 
 | Metric | Value | Evidence |
 |--------|-------|----------|
-| Frames produced | ~312 in 10s (~30 fps) | v32g bridge output (10s session) |
-| Frames received | 301/312 (96.5% capture) | v32g: dual-slot seqlock + AVCC peek |
-| Frames decoded | 301/301 (100%) | v32g: zero decode failures |
-| Decoded FPS | 30.1 fps | v32g: AVCC peek reduces memcpy, frees CPU for pipeline |
-| Total FPS (incl. drops) | 30.1 fps | v32g: matches camera output rate |
-| IDR keyframes | 21 in 10s (~2/sec, GOP ~15) | v32g bridge output |
+| Frames produced | ~1857 in 60s (~31 fps) | v32h bridge output (60s session) |
+| Frames received | 1799/1857 (96.9% capture) | v32h: dual-slot seqlock + AVCC peek + multi-frame batch |
+| Frames decoded | 1799/1799 (100%) | v32h: zero decode failures over 60s |
+| Decoded FPS | 30.0 fps | v32h: matches camera output rate |
+| Total FPS (incl. drops) | 30.0 fps | v32h: matches camera output rate |
+| IDR keyframes | ~121 in 60s (~2/sec, GOP ~15) | v32h bridge output |
 | SD card writes | 0 bytes | 0-byte MOV file, SD usage unchanged |
-| Max decode streak | 301 frames (10s) | v32g: entire session, zero failures |
-| Best 60s result | 1691/1691 (100%) in 60s, 28.2fps | v32d: dual-slot seqlock, no AVCC peek |
+| Max decode streak | 1799 frames (60s) | v32h: entire session, zero failures |
+| Multi-frame batches | ~3 per 60s | v32h: both slots unseen simultaneously is rare |
 
 ### 17. Original TakeSemaphore timeout (1000ms) is correct for webcam
 
@@ -344,7 +345,7 @@ With yield restored: stable operation, correct frame sizes.
 
 **Cause**: DryOS heap exhaustion. 64KB (frame_data_buf) + 128KB (multi_frame_buf) = 192KB from DryOS heap. The camera's ISP, display controller, and IS motor controller share the same heap. 128KB extra allocation starves these subsystems.
 
-**Implication**: Maximum safe malloc from webcam module is ~64KB. Multi-frame batching requires an alternative approach that doesn't allocate a large buffer (e.g., stack-based for small batches, or different packing strategy).
+**Implication**: Maximum safe malloc from webcam module is between 120KB and 192KB. 120KB single allocation is proven safe (v32h: 60s, no dark screen). 192KB total (64+128) causes dark screen. Multi-frame batching works by using a single 120KB buffer instead of two separate allocations.
 
 ## What Needs to Happen Next
 
