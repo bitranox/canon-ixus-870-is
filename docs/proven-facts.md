@@ -258,17 +258,23 @@ PTP USB transfer → bridge → FFmpeg decode → virtual webcam
 
 | Metric | Value | Evidence |
 |--------|-------|----------|
-| Frames produced | 226 in 10s (~23 fps) | v31b bridge output (full 10s session) |
-| Frames decoded | 192 (89.3%) | v31b: 192/215 unique frames decoded |
-| Decoded FPS | 19.2 fps | v31b: measured first-to-last frame |
-| Total FPS (incl. drops) | 27.6 fps | v31b bridge output |
-| IDR keyframes | 18 in 10s (~1.8/sec, GOP ~12) | v31b bridge output |
-| Average bitrate | ~8 Mbps | v31b bridge output |
+| Frames produced | ~245 in 10s (~24.5 fps) | v31c bridge output (full 10s session) |
+| Frames decoded | 226 (96.2%) | v31c: 226/235 unique frames decoded |
+| Decoded FPS | 22.6 fps | v31c: measured first-to-last frame |
+| Total FPS (incl. drops) | 28.1 fps | v31c bridge output |
+| IDR keyframes | 20 in 10s (~2/sec, GOP ~12) | v31c bridge output |
+| Average bitrate | ~8 Mbps | v31c bridge output |
 | SD card writes | 0 bytes | 0-byte MOV file, SD usage unchanged |
-| Frame loss source | Seqlock overwrites → missed IDRs → decode failures | 23 decode failures clustered after missed IDRs |
+| Max decode streak | 210 frames (cam#2-cam#219) | v31c: ~8.4s unbroken decode |
+| Frame loss source | Seqlock overwrites → missed IDRs → decode failures | 9 decode failures clustered after one missed IDR at ~9s |
+
+### 17. Original TakeSemaphore timeout (1000ms) is correct for webcam
+
+**Evidence**: v31c reverted spy_take_sem_short from 50ms fake-success to passthrough with original 1000ms timeout. Result: 226/235 decoded (96.2%), 22.6fps, max streak 210 frames, full 10s session. Previous 50ms timeout caused intermittent recording death after ~2s.
+**Mechanism**: JPCORE hardware encode completes in ~1-5ms. The 1000ms timeout never fires during normal operation. The 50ms timeout occasionally fired when JPCORE was slow (e.g. IDR frames), returning fake success while [SP,#0x38] was still non-zero. Even with error path bypass, the corrupted JPCORE state caused pipeline instability.
+**Implication**: spy_take_sem_short is now a simple passthrough. The error path bypass (proven fact #16) remains as a safety net but should rarely fire with 1000ms timeout.
 
 ## What Needs to Happen Next
 
-1. **Reduce decode failures from missed IDRs**: The 10.7% decode loss comes from seqlock overwrites that skip IDR frames. When the bridge misses an IDR, all P-frames until the next IDR fail to decode. Options: increase IDR frequency on camera, or add bridge-side IDR re-injection for these gaps.
-2. **Evaluate spy_take_sem_short**: With the corrected understanding that TakeSemaphore waits for JPCORE encode (~1-5ms), the 50ms timeout may be unnecessary. Consider using the original 1000ms timeout, since JPCORE encode should always complete quickly.
-3. **Virtual webcam integration**: Connect the H.264 decode output to a DirectShow virtual webcam filter for use in video conferencing apps.
+1. **Reduce decode failures from missed IDRs**: The 3.8% decode loss comes from seqlock overwrites that skip IDR frames. When the bridge misses an IDR, all P-frames until the next IDR fail to decode. Options: increase IDR frequency on camera, or add bridge-side IDR re-injection for these gaps.
+2. **Virtual webcam integration**: Connect the H.264 decode output to a DirectShow virtual webcam filter for use in video conferencing apps.

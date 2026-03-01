@@ -2578,3 +2578,36 @@ Added `spy_skip_error_path()` — checks webcam magic at 0xFF000. When webcam is
 - 23 decode failures clustered at t=2.0s, t=4.0s, t=6.0s — these occur when the bridge misses an IDR due to seqlock overwrite, then all P-frames until the next IDR fail to decode
 - Max decode streak 75 frames (cam#148-cam#226) = 7.5 seconds of unbroken video
 - 0 USB errors, 0 frame gaps — rock-solid transport
+
+## v31c — Revert TakeSemaphore to Original 1000ms Timeout (2026-03-01)
+
+### Problem
+v31b achieved full 10s sessions but was inconsistent — some runs died after ~2s. The 50ms timeout in spy_take_sem_short was the root cause: JPCORE encode takes ~1-5ms normally, but occasionally longer (especially for IDR frames). When the 50ms timeout fired, spy_take_sem_short returned fake success (0) while [SP,#0x38] still had its previous non-zero value. Even with error path bypass, this corrupted JPCORE pipeline state.
+
+### Fix
+Reverted spy_take_sem_short to a simple passthrough — calls real TakeSemaphore with the original 1000ms timeout. Since JPCORE encode completes in ~1-5ms, the 1000ms timeout never fires during normal operation.
+
+### Test Results (10s session)
+```
+=== SESSION SUMMARY ===
+  Received: 226 frames
+  Decoded FPS: 22.6
+  Total FPS (incl. drops): 28.1
+  Camera produced: ~245 frames
+  Duration: 10.0 seconds
+=== DEBUG SUMMARY ===
+  Decode: 235 attempts, 226 OK (96.2%), 9 FAIL
+  NAL types: IDR: 20, P-frame: 215
+  AVCC valid: 235/235 (100.0%)
+  Max streak: 210 (cam#2-cam#219)
+  USB errors: send=0 recv=0 timeout=0 io=0
+```
+
+### Analysis
+- **96.2% decode rate** — up from 89.3% in v31b
+- **22.6 fps** — up from 19.2 fps in v31b
+- **Max decode streak 210 frames** (cam#2 through cam#219) = ~8.4 seconds of unbroken video
+- Only 9 decode failures at ~9s when one IDR was missed via seqlock overwrite
+- 20 IDRs in 10s (~2/sec), consistent GOP ~12
+- 0 USB errors — stable transport
+- The error path bypass (v31b) remains as safety net but no longer fires regularly
