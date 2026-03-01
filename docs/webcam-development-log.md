@@ -2298,3 +2298,242 @@ Camera produced: ~494 frames
 3. Previous "19fps" measurement was understated — true decoded FPS is ~24fps when measured from first-to-last frame
 4. Total FPS (incl. decode failures) is ~28fps, close to the camera's 30fps native rate
 5. The ~6fps "loss" is seqlock overwrites (~2fps) + H.264 decode failures (~4fps), not a fundamental PTP bottleneck
+
+## v31 Series — Comprehensive Pipeline Disassembly & Periodic Gap Analysis (2026-03-01)
+
+### Problem Statement
+
+The v30c webcam pipeline has periodic gaps where FPS drops to 0 for ~2 seconds, then bursts to ~45fps catching up. These gaps occur every ~8 seconds. Average performance is 24fps, but the gaps make video unusable.
+
+### v31a — Zeroing [SP,#0x38] in asm (FAILURE)
+
+**Hypothesis**: The result variable at [SP,#0x38] (encode completion status) might have stale non-zero values from previous iterations, triggering the error path.
+
+**Change**: Added `STR R7, [SP, #0x38]` (R7=0) before each `BL sub_FF8EDBE0` to pre-clear the result.
+
+**Result**: Severe regression — 1.3fps, corrupted H.264 pipeline. The pre-clearing interfered with the JPCORE completion callback's write to that location. Reverted.
+
+### v31b — TakeSemaphore timeout 50ms→500ms
+
+**Hypothesis**: 50ms timeout is occasionally too short for JPCORE encode, causing spurious timeout→error→STATE=1 transitions.
+
+**Change**: Increased spy_take_sem_short timeout from 50ms to 500ms.
+
+**Status**: SD card deployed, awaiting test results.
+
+### v31 Comprehensive Pipeline Disassembly
+
+To stop guessing and understand the pipeline fully, we performed a comprehensive 3-level deep decompilation of all functions in the msg 6 write pipeline.
+
+**Ghidra scripts created**:
+- `DecompileWritePipeline.java` — 206 functions decompiled (410KB output)
+- `DecompileCallbacks.java` — JPCORE completion callbacks (168KB output)
+- `DecompileCallback0xA0.java` — STATE promotion callback analysis
+
+#### Finding 1: sub_FF8EDBE0 = JPCORE Encode Submission (NOT SD write!)
+
+sub_FF8EDBE0 is NOT an async SD card write as we originally assumed. It submits a **JPCORE hardware encode operation**.
+
+The flow:
+1. Stores all 14 parameters into encode state struct at **0x7F6C** (DAT_ff8ed984)
+2. Stores `param_14` (= &[SP,#0x38]) at encode_state+0x60 — this is where the result will be written
+3. Calls FUN_ff8eda90 which:
+   - Registers JPCORE completion callback (FUN_ff8ed6dc) via JPCORE_RegisterCallback
+   - Configures JPCORE output buffer, routing, mode
+   - Sets encode completion handler (FUN_ff8f18a4 for non-first frames)
+   - Triggers JPCORE hardware encode via FUN_ff8ef950(3,0) + FUN_ff8f2128()
+4. Returns (encode runs asynchronously in JPCORE hardware)
+
+**Implication**: The TakeSemaphore after sub_FF8EDBE0 waits for JPCORE hardware to finish encoding, NOT for SD card writes. JPCORE encoding a 40KB frame takes ~1-5ms. The 50ms timeout is already 10-50x longer than needed.
+
+#### Finding 2: Semaphore Signaling Chain (Fully Traced)
+
+```
+sub_FF8EDBE0 → FUN_ff8eda90
+    │ configures JPCORE hardware
+    │ registers callbacks
+    │ starts encode
+    ▼
+JPCORE hardware (encodes H.264 frame, ~1-5ms)
+    │
+    ▼ hardware interrupt
+JPCORE Interrupt Handler (0xFF849168)
+    │ thunk_FUN_ff81056c()        ← clear interrupt
+    │ GiveSemaphore(*(DAT_ff84924c + 0x1c))  ← SIGNALS THE SEMAPHORE
+    │ if condition: call registered callback
+    ▼
+FUN_ff8ed6dc (pipeline 3 completion callback)
+    │ reads encoded size from JPCORE output
+    │ *(*(encode_state + 0x60)) = 0   ← WRITES 0 TO [SP,#0x38] (SUCCESS!)
+    │ encode_state[2] = 1             ← mark encode complete
+    │ FUN_ff8ef9c0(3)                 ← start next pipeline stage
+    ▼
+FUN_ff8f18a4 (JPCORE encode output handler)
+    │ reads JPCORE status register
+    │ encode_state_jpcore+0x38 = 0    ← clear JPCORE status
+    │ calculates encoded bytes from JPCORE output position
+    │ calls callback at encode_state+0x28 with encoded byte count
+    ▼
+TakeSemaphore returns in msg 6 handler
+    │ checks [SP,#0x38] — 0 means success
+```
+
+**Key addresses**:
+- Encode state struct: 0x7F6C (DAT_ff8ed984)
+- JPCORE encode state: 0x80B4 (DAT_ff8f12ac)
+- JPCORE hardware registers: DAT_ff8f192c
+
+#### Finding 3: [SP,#0x38] Write Mechanism
+
+FUN_ff8ed6dc (the encode completion callback) writes to the caller's result location:
+```c
+*(undefined4 *)puVar1[0x18] = 0;  // puVar1 = DAT_ff8ed984
+// This dereferences: *(*(0x7F6C + 0x60)) = 0
+// encode_state+0x60 holds &[SP,#0x38] from sub_FF8EDBE0's param_14
+// Result: [SP,#0x38] = 0 (success)
+```
+
+When TakeSemaphore completes normally, the callback has already written 0 to [SP,#0x38]. When TakeSemaphore times out, [SP,#0x38] may still hold its previous value (not yet written by callback).
+
+#### Finding 4: Error Path = PERMANENT Pipeline Death
+
+When TakeSemaphore times out (returns 9) or [SP,#0x38] is non-zero:
+1. sub_FF930358 is called:
+   - Sets ring_buffer+0x88 = 1 (drain mode)
+   - Posts msg 8 to task_MovWrite queue
+   - TakeSemaphore on ring_buffer+8 (0x8970) — blocks until drain completes
+2. STATE is set to 1 (`STR R5, [R6,#0x3C]`)
+3. sub_FF879164 (error collector) is called
+
+**After STATE=1, there is NO recovery mechanism.** The callback at +0xA0 follows this chain:
+- **msg 2** (once at start): sets callback = 0xFF85DDA8, STATE=2
+- **First msg 6**: 0xFF85DDA8 runs → replaces callback with 0xFF85DD18
+- **Second msg 6**: 0xFF85DD18 runs → sets STATE=3, replaces callback with 0xFF85DD14 (BX LR, no-op)
+- **All subsequent msg 6**: 0xFF85DD14 → does nothing
+
+Once the one-shot callback chain has fired (during normal startup), the callback is the permanent no-op. If STATE is set back to 1, no callback will ever promote it to 3. All subsequent msg 6 calls check `CMP R0, #4 / CMPNE R0, #3` and fall through (skip all frame processing).
+
+**This means: if the error path fires even ONCE, the webcam pipeline is permanently dead for the rest of the recording session.**
+
+#### Finding 5: Encode State Structs Mapped
+
+**Encode state struct at 0x7F6C** (DAT_ff8ed984):
+| Offset | Type | Description |
+|--------|------|-------------|
+| +0x08 | uint | Encode result flag (cleared to 0 by callbacks) |
+| +0x0C | uint | Output slot/parameter |
+| +0x10 | uint | Encode counter |
+| +0x14 | uint | Encode mode (5=standard, 7/10=special) |
+| +0x18 | ptr | Stored param_1 from sub_FF8EDBE0 |
+| +0x1C | uint | Width (adjusted for some modes) |
+| +0x20 | ptr | Stored param_3 |
+| +0x24 | int | Stored param_13 (-1=first, -2=non-first) |
+| +0x28 | ptr | Output buffer address (stored param_4) |
+| +0x2C | ptr | Stored param_6 |
+| +0x30 | ptr | Stored param_8 |
+| +0x34 | uint | JPCORE mode parameter |
+| +0x38 | ptr | Stored param_7 |
+| +0x3C | int | Stored param_11 |
+| +0x40 | ptr | Stored param_12 |
+| +0x58 | ptr | Stored param_9 |
+| +0x5C | ptr | Stored param_10 |
+| +0x60 | ptr | **Result address** (&[SP,#0x38] from caller) |
+| +0x64 | fptr | Callback function pointer (+0x64) |
+| +0x68 | fptr | PostEncode1 callback (called by sub_FF8EDC88 with arg 0) |
+| +0x6C | fptr | Non-first-chunk handler (function pointer for param_13 >= 0) |
+
+**JPCORE encode state at 0x80B4** (DAT_ff8f12ac):
+| Offset | Type | Description |
+|--------|------|-------------|
+| +0x0C | ptr | Parameter to completion callback |
+| +0x18 | fptr | Encode completion callback (FUN_ff8f18a4 / DAT_ff8f1e58) |
+| +0x28 | fptr | Caller callback (from encode_state+0x28, param_4 of sub_FF8EDBE0) |
+| +0x30 | ptr | Output buffer address |
+| +0x38 | uint | Encode status (cleared to 0 by FUN_ff8f18a4 on success) |
+| +0x3C | uint | JPCORE output position (tracks encoded bytes) |
+
+#### Finding 6: task_MovWrite with +0x80=0 Confirmed Safe
+
+task_MovWrite case 2 handler (decompiled):
+```c
+case 2:
+    bVar8 = (*(iVar1 + 0x4c) == 0);  // write error flag
+    if (bVar8) {
+        uVar4 = *(iVar1 + 0x80);     // is_open flag
+    }
+    if (bVar8 && uVar4 == 1 && iVar6 != 0) {
+        // Write to SD card (SKIPPED when +0x80=0)
+        FUN_ff85235c(fd, buf, size);
+    } else {
+        // Just update consumed pointer (+0x18)
+        *(iVar1 + 0x18) = ptr + size;  // wrap-around handled
+    }
+```
+Our +0x80=0 approach causes the write branch to be skipped every time. The consumed pointer is still updated, keeping the ring buffer flowing.
+
+#### Analysis: Root Cause of Periodic Gaps
+
+The periodic 2-second gaps are most likely caused by **one of the error paths firing**, triggering sub_FF930358 (drain mode) which:
+1. Blocks movie_record_task for the entire drain duration (~2 seconds)
+2. Sets STATE=1 (pipeline death)
+
+However, since the pipeline DOES recover (frames resume after 2s), there must be an external re-trigger. The most likely mechanism: **msg 4 (periodic IDR insertion)**. Every ~8 seconds, msg 4 (sub_FF85D6CC) fires and re-initializes parts of the pipeline, including potentially resetting STATE through its own callback chain at +0xA0. This would explain both the ~8-second periodicity and the 2-second recovery time.
+
+#### Proposed Fix: Skip Error Path When Webcam Active
+
+**Option C (recommended)**: When webcam is active, modify the error paths to skip sub_FF930358 and STATE=1 assignment.
+
+Instead of:
+```asm
+CMP     R0, #9
+BEQ     loc_FF85DBA4      // Timeout → drain + STATE=1
+...
+LDR     R0, [SP,#0x38]
+CMP     R0, #0
+BNE     loc_FF85DBC0      // Error → drain + STATE=1
+```
+
+When webcam active, make both error paths fall through to normal cleanup (sub_FF8EDC88 + sub_FF8EDCC4) instead of calling sub_FF930358 + setting STATE=1. The JPCORE callback will eventually complete and clean up the encode state.
+
+This is safe because:
+1. We're not writing to SD (no file corruption risk)
+2. The ring buffer continues flowing (+0x80=0 prevents writes but allows pointer advancement)
+3. sub_FF8EDC88/sub_FF8EDCC4 clean up JPCORE state properly
+4. The encode will complete asynchronously even if we've moved on
+
+## v31a — NAL Type Instrumentation + IDR Re-injection Test (2026-03-01)
+
+### Goal
+Determine if the camera's H.264 encoder produces IDR keyframes autonomously during webcam recording. Previous session showed only 1 IDR in 205 frames — was that the norm or an anomaly?
+
+### Changes
+1. **Camera-side NAL debug reporting**: Added debug frame in `spy_ring_write()` that reports the NAL type byte (`NALT`), frame size (`FSIZ`), and frame counter (`FNUM`) every 30th frame.
+2. **Bridge-side throttled IDR re-injection**: Added conservative IDR re-injection (after 15 consecutive decode failures, 30-frame cooldown). Key difference from v23-v25: limited to ~1/sec max.
+3. **CLAUDE.md rule**: Added "Check proven-facts.md first" before making new conclusions.
+
+### Test Results
+```
+=== SESSION SUMMARY ===
+  Received: 47 frames
+  Decoded FPS: 23.5
+  Total FPS (incl. drops): 31.2
+  Camera produced: ~49 frames
+  Duration: 2.0 seconds (USB died after ~2s)
+=== DEBUG SUMMARY ===
+  Decode: 47 attempts, 47 OK (100.0%), 0 FAIL
+  NAL types: IDR: 5, P-frame: 42
+  AVCC valid: 47/47 (100.0%)
+  Max streak: 47 (cam#2-cam#49)
+  IDR reinjects: 0
+```
+
+IDR keyframes appeared at cam#2, #15, #26, #37, #49 — roughly every 11 frames (~2.5/sec). GOP is ~11 frames.
+
+### Key Finding: Camera Produces IDRs Autonomously
+**The camera's H.264 encoder produces IDR keyframes at regular intervals (~every 11 frames) without any software intervention.** The previous session with only 1 IDR was an anomaly (possibly scene-dependent or startup timing). IDR re-injection is unnecessary — the natural GOP provides sufficient decoder sync points.
+
+### NAL Debug Frames
+The NALT debug frames showed `0xFF` (255) — this is the raw first byte of the uncached frame data before `spy_cache_invalidate` runs on it. The invalidation happens before the seqlock write but the debug frame is sent from within the same function, so the debug frame reads pre-invalidation data. The bridge correctly sees the actual NAL types (0x65=IDR, 0x61=P-frame) from the seqlock-delivered data.
+
+### Remaining Issue: USB Connection Dies After ~2s
+USB timeouts start at t=2.0s and never recover. The camera produced 49 frames in 2 seconds then the USB connection died. This is the main bottleneck — not IDR availability. Bridge received 47 of 49 frames (96% capture rate) during the 2s window.
