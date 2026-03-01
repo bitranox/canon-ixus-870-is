@@ -345,7 +345,7 @@ With yield restored: stable operation, correct frame sizes.
 
 **Cause**: DryOS heap exhaustion. 64KB (frame_data_buf) + 128KB (multi_frame_buf) = 192KB from DryOS heap. The camera's ISP, display controller, and IS motor controller share the same heap. 128KB extra allocation starves these subsystems.
 
-**Implication**: Maximum safe malloc from webcam module is between 120KB and 192KB. 120KB single allocation is proven safe (v32h: 60s, no dark screen). 192KB total (64+128) causes dark screen. Multi-frame batching works by using a single 120KB buffer instead of two separate allocations.
+**Implication**: Maximum safe malloc from webcam module is between 130KB and 192KB. 130KB single allocation is proven safe (v32h: 60s, no dark screen). 192KB total (64+128) causes dark screen. Multi-frame batching works by using a single 130KB buffer (2×65KB max frame size).
 
 ## What Needs to Happen Next
 
