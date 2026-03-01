@@ -2816,3 +2816,29 @@ v32b copies 64KB per frame (ring buffer chunk size) but actual H.264 frames aver
 | Decoded FPS | — | 15.6 | 21.8 | **23.0** |
 | IDRs | 25 | 25 | 40 | **40** |
 | Camera frames | ~389 | ~460 | ~462 | **~479** |
+
+### 60-Second Extended Stability Test
+```
+=== SESSION SUMMARY ===
+  Received: 1542 frames
+  Decoded FPS: 25.7
+  Total FPS (incl. drops): 30.0
+  Camera produced: ~1632 frames
+  Duration: 60.0 seconds
+=== DEBUG SUMMARY ===
+  PTP calls:    1801 (1571 success, 230 no-frame)
+  Decode:       1571 attempts, 1542 OK (98.2%), 29 FAIL
+  Decode errors: "Decoder needs more data": 29
+  NAL types:    IDR: 118, P-frame: 1453, SEI: 0, other: 0
+  AVCC valid:   1571/1571 (100.0%)
+  Max streak:   892 (cam#23-cam#947)
+  USB errors:   send=0 recv=0 timeout=0 io=0
+  Frame sizes:  min=30892 max=64920 avg=39877
+```
+
+- **98.2% decode over 60 seconds** — no degradation over time (was 67.9% at 20s before dual-slot)
+- **Max streak 892** consecutive decoded frames (~35 seconds unbroken)
+- **25.7 fps decoded** — higher than 20s test (23.0), likely camera scene stabilized with smaller frames
+- **118 IDRs** (~2/sec consistent throughout) — all captured
+- Only 29 decode failures scattered across 1571 frames
+- Camera recorded fine, clean shutdown, 0 USB errors
