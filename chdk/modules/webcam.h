@@ -15,6 +15,7 @@
 #define WEBCAM_FMT_UYVY  1      // Raw UYVY (YUV422) frame, 2 bytes per pixel
 #define WEBCAM_FMT_H264  2      // H.264 NAL unit(s) for one video frame
 #define WEBCAM_FMT_DEBUG 3      // Debug diagnostic frame (tagged key-value entries)
+#define WEBCAM_FMT_H264_MULTI 4 // Multiple H.264 frames batched: [u16 count][u32 sz][data]...
 
 // Frame info returned to callers
 typedef struct {

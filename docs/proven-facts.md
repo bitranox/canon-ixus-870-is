@@ -236,8 +236,8 @@ sub_FF85D98C_my (msg 6 handler)
     ▼
 spy_ring_write
     │ invalidates CPU cache for frame data (JPCORE DMA bypasses cache)
-    │ stores {ptr, size} via dual-slot seqlock at 0xFF000
-    │ (alternates hdr[1..3] / hdr[4..6] per frame)
+    │ stores {ptr, size} via triple-slot seqlock at 0xFF000
+    │ (cycles hdr[1..3] / hdr[4..6] / hdr[7..9] per frame)
     │ clears +0x80 (is_open) at 0x89E8 → prevents SD file writes
     ▼
 JPCORE encode pipeline (runs unmodified)
@@ -250,8 +250,8 @@ task_MovWrite (0xFF92F1EC)
     │ still updates consumed pointer (+0x18) → pipeline keeps flowing
     ▼
 webcam.c (CHDK module)
-    │ polls seqlock (100 × msleep(10)), memcpy from VRAM on match
-    │ copies frame data to PTP response buffer
+    │ polls triple-slot seqlock (100 × msleep(10)), collects ALL unseen frames
+    │ packs 1-3 frames into PTP response (H264 or H264_MULTI format)
     ▼
 PTP USB transfer → bridge → FFmpeg decode → virtual webcam
 ```
@@ -260,15 +260,16 @@ PTP USB transfer → bridge → FFmpeg decode → virtual webcam
 
 | Metric | Value | Evidence |
 |--------|-------|----------|
-| Frames produced | ~1752 in 60s (~29 fps) | v32d bridge output (full 60s session) |
-| Frames decoded | 1691/1691 (100%) | v32d: 1691 unique frames, all decoded OK |
-| Decoded FPS | 28.2 fps | v32d: measured first-to-last frame |
-| Total FPS (incl. drops) | 30.0 fps | v32d bridge output |
-| IDR keyframes | 121 in 60s (~2/sec, GOP ~11) | v32d bridge output |
-| Average bitrate | ~7-8 Mbps | v32d bridge output |
+| Frames produced | ~241 in 10s (~30 fps) | v32f bridge output (10s session) |
+| Frames received | 240/241 (99.6% capture) | v32f: multi-frame batching nearly eliminates USB-level loss |
+| Frames decoded | 223/240 (92.9%) | v32f: 17 "Decoder needs more data" failures in 2 clusters |
+| Decoded FPS | 22.3 fps | v32f: measured first-to-last frame (10s) |
+| Total FPS (incl. drops) | 30.2 fps | v32f: multi-frame batching matches camera output rate |
+| IDR keyframes | 19 in 10s (~2/sec, GOP ~11) | v32f bridge output |
 | SD card writes | 0 bytes | 0-byte MOV file, SD usage unchanged |
-| Max decode streak | 1691 frames (cam#2-cam#1752) | v32d: entire 60s session unbroken |
-| Frame loss source | Polling rate vs production rate mismatch; dual-slot seqlock reduces this to <4% | v32d: 1752 produced, 1691 received (96.5% capture). All received frames decode OK |
+| Max decode streak | 145 frames | v32f: cam#2-cam#145, broken by decode failure cluster |
+| Multi-frame batches | ~10 in 10s (batch=2) | v32f: mix of single and 2-frame PTP responses |
+| Best decode rate (single-frame) | 1691/1691 (100%) in 60s, 28.2fps | v32d: dual-slot seqlock, no batching |
 
 ### 17. Original TakeSemaphore timeout (1000ms) is correct for webcam
 

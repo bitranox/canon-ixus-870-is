@@ -2933,3 +2933,71 @@ Counter-intuitive result: msleep(5) starves the pipeline more than msleep(1). Dr
 ### Conclusion
 
 **msleep(10) is confirmed optimal.** The USB round-trip (~35ms per frame) is the real bottleneck, not the polling interval. The ~3.5% capture loss (61 frames/min) is inherent to the PTP request-response protocol and cannot be improved by polling faster. Reverted to msleep(10).
+
+## v32f — Multi-Frame Batch Transfer (2026-03-01)
+
+### Goal
+Pack ALL unseen frames from the 3-slot seqlock into a single PTP response. Single-frame transfer is capped at ~28fps due to USB round-trip (~35ms) vs camera production interval (33ms). Batching 2-3 frames per response can break through this ceiling.
+
+### Changes
+- **webcam.c**: Replaced single-frame "find oldest unseen slot" with multi-frame collection. Collects all unseen slots, sorts by sequence (oldest first), AVCC-parses each, packs into 128KB `multi_frame_buf`. Single frame returns as `WEBCAM_FMT_H264`, 2+ frames as `WEBCAM_FMT_H264_MULTI` with `[u16 count][u32 sz][data]...` format.
+- **Buffer**: 128KB malloc for packing buffer (holds 2 P-frames or 1 IDR + 1 P-frame comfortably).
+- **Bridge**: No changes needed — `H264_MULTI` handler already implemented in main.cpp (lines 678-806).
+- **movie_rec.c**: No changes — triple-slot branchless producer already in place from v32e.
+
+### Bug fix during implementation
+First attempt rejected frames where `sz > SPY_BUF_SIZE` (64KB). But `sz` from spy buffer is the raw ring buffer chunk size (262144 = 256KB), not the actual H.264 frame size. The old single-frame code clamped (`sz = min(sz, SPY_BUF_SIZE)`), the new code rejected (`goto mark_seen`). Fixed by restoring the clamp behavior. This matches proven fact #19.
+
+### Test Results (10 seconds, --debug --timeout 10)
+
+```
+=== SESSION SUMMARY ===
+  Received: 223 frames
+  Dropped:  79 (decode failures)
+  Unique data: 240 frames
+  Last cam frame#: 241
+  Duration: 10.0 seconds
+  Decoded FPS: 22.3
+  Total FPS (incl. drops): 30.2
+  Camera produced: ~241 frames
+=======================
+
+=== DEBUG SUMMARY ===
+  PTP calls:    302 (240 success, 62 no-frame)
+  Decode:       240 attempts, 223 OK (92.9%), 17 FAIL
+  Decode errors: "Decoder needs more data": 17
+  NAL types:    IDR: 19, P-frame: 221, SEI: 0, other: 0
+  AVCC valid:   240/240 (100.0%)
+  Max streak:   145 (cam#2-cam#145)
+=====================
+```
+
+### Key Observations
+
+1. **Multi-frame batching works**: `MULTI batch=2` visible throughout the log. Mix of single-frame and 2-frame responses — exactly as expected (single when PTP finishes before next frame, batch when 2 accumulated).
+2. **Near-zero frame loss**: 240 unique frames received out of ~241 produced (99.6% capture rate, up from 96.5% in v32d).
+3. **Total FPS matches camera**: 30.2fps total throughput — batching breaks through the single-frame ~28fps ceiling.
+4. **Decode regression**: 92.9% decode (223/240) vs v32d's 100%. 17 "Decoder needs more data" failures appear in two clusters (t=5.5s and t=6.5s). These occur when the H.264 decoder loses its reference frame chain — a skipped frame causes subsequent P-frames to fail until the next IDR resynchronizes.
+5. **Decoded FPS lower**: 22.3fps vs v32d's 28.2fps. The decode failures (17 frames) and recovery time pull the average down.
+
+### Comparison Table
+
+| Metric | v32d (60s) | v32f (10s) |
+|--------|-----------|-----------|
+| Capture rate | 96.5% | **99.6%** |
+| Total FPS | 30.0 | **30.2** |
+| Decode rate | **100%** | 92.9% |
+| Decoded FPS | **28.2** | 22.3 |
+| Max streak | **1691** | 145 |
+| AVCC valid | 100% | 100% |
+
+### Analysis
+
+The multi-frame batching successfully eliminates frame loss at the USB level (99.6% capture vs 96.5%). However, the decode failure clusters suggest that some frames in the batch may have data integrity issues — possibly torn reads from the seqlock (the `s[2] != pending[i].seq` check should catch these, but the 1ms yield between detection and read may not be sufficient when 2-3 slots change rapidly).
+
+The decode failures need investigation. Possible causes:
+- Ordering issue: frames delivered out of sequence to FFmpeg
+- Torn writes not caught by seqlock validation
+- Frame data corruption during multi-slot memcpy
+
+A 60-second test would reveal whether the decode failures are transient (startup) or persistent.

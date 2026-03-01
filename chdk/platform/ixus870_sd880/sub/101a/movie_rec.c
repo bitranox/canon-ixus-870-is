@@ -209,22 +209,17 @@ static void __attribute__((used,noinline)) spy_ring_write(unsigned char *ptr, un
                 }
             }
 
-            // Dual-slot seqlock: alternate between slot A (hdr[1..3]) and
-            // slot B (hdr[4..6]). Store actual encoded size, not chunk size.
+            // Triple-slot seqlock: cycle A (hdr[1..3]), B (hdr[4..6]), C (hdr[7..9]).
+            // Branchless: compute base index from slot counter.
             {
                 static int slot = 0;
-                if (slot == 0) {
-                    hdr[3]++;
-                    hdr[1] = (unsigned int)ptr;
-                    hdr[2] = actual;
-                    hdr[3]++;
-                } else {
-                    hdr[6]++;
-                    hdr[4] = (unsigned int)ptr;
-                    hdr[5] = actual;
-                    hdr[6]++;
-                }
-                slot ^= 1;
+                volatile unsigned int *s = hdr + 1 + slot * 3;
+                s[2]++;
+                s[0] = (unsigned int)ptr;
+                s[1] = actual;
+                s[2]++;
+                slot++;
+                if (slot >= 3) slot = 0;
             }
         }
     }

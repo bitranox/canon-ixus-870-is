@@ -675,6 +675,136 @@ int main(int argc, char* argv[]) {
             continue;  // Not a video frame — don't count or decode
         }
 
+        // Handle multi-frame H.264 batch: unpack into individual frames.
+        // Format: [u16 count][u32 sz][data]... — camera batches 2-3 frames per PTP call.
+        // We expand them into separate mjpeg entries and process each through the
+        // normal H.264 path below by re-entering the loop body via a queue.
+        if (mjpeg.format == ptp::FRAME_FMT_H264_MULTI) {
+            if (mjpeg.data.size() < 2) continue;
+            uint16_t mf_count = mjpeg.data[0] | (mjpeg.data[1] << 8);
+            size_t mf_pos = 2;
+            if (opts.debug) {
+                auto t = std::chrono::duration<double>(std::chrono::steady_clock::now() - start_time).count();
+                fprintf(stderr, "[DBG] t=%.3f MULTI batch=%d total=%zu bytes\n",
+                        t, mf_count, mjpeg.data.size());
+            }
+            for (int mf_i = 0; mf_i < mf_count && mf_pos + 4 <= mjpeg.data.size(); mf_i++) {
+                uint32_t mf_sz = mjpeg.data[mf_pos] | (mjpeg.data[mf_pos+1] << 8)
+                               | (mjpeg.data[mf_pos+2] << 16) | (mjpeg.data[mf_pos+3] << 24);
+                mf_pos += 4;
+                if (mf_sz == 0 || mf_pos + mf_sz > mjpeg.data.size()) break;
+
+                // Create individual H.264 frame and decode it
+                ptp::MJPEGFrame sub_frame;
+                sub_frame.data.assign(mjpeg.data.begin() + mf_pos, mjpeg.data.begin() + mf_pos + mf_sz);
+                sub_frame.width = mjpeg.width;
+                sub_frame.height = mjpeg.height;
+                sub_frame.frame_num = mjpeg.frame_num;
+                sub_frame.format = ptp::FRAME_FMT_H264;
+                mf_pos += mf_sz;
+
+                // Debug stats
+                if (opts.debug) {
+                    dbg_ptp_calls++;
+                    dbg_ptp_success++;
+                    dbg_decode_attempts++;
+                    int ssz = static_cast<int>(sub_frame.data.size());
+                    dbg_total_frame_bytes += ssz;
+                    if (ssz < dbg_min_frame_size) dbg_min_frame_size = ssz;
+                    if (ssz > dbg_max_frame_size) dbg_max_frame_size = ssz;
+
+                    AvccInfo avcc = check_avcc(sub_frame.data.data(), sub_frame.data.size());
+                    if (avcc.valid) dbg_avcc_valid++; else dbg_avcc_invalid++;
+                    switch (avcc.nal_type) {
+                        case 5: dbg_nal_idr++; break;
+                        case 1: dbg_nal_p++; break;
+                        case 6: dbg_nal_sei++; break;
+                        default: dbg_nal_other++; break;
+                    }
+                }
+
+                // Track uniqueness
+                unique_frames++;
+                if (unique_frames <= 10) {
+                    fprintf(stderr, "UNIQUE #%d (cam#%u[%d/%d], %zu bytes): ",
+                            unique_frames, sub_frame.frame_num, mf_i+1, mf_count, sub_frame.data.size());
+                    for (size_t bi = 0; bi < 16 && bi < sub_frame.data.size(); bi++)
+                        fprintf(stderr, "%02X ", sub_frame.data[bi]);
+                    if (sub_frame.data.size() >= 5)
+                        fprintf(stderr, " NAL=0x%02X (type %d)", sub_frame.data[4], sub_frame.data[4] & 0x1F);
+                    fprintf(stderr, "\n");
+                }
+                if (sub_frame.data.size() >= 5 && (sub_frame.data[4] & 0x1F) == 5) {
+                    static int idr_count = 0;
+                    idr_count++;
+                    fprintf(stderr, "IDR #%d (cam#%u[%d/%d], %zu bytes)\n",
+                            idr_count, sub_frame.frame_num, mf_i+1, mf_count, sub_frame.data.size());
+                }
+
+                // Decode
+#ifdef HAS_FFMPEG
+                webcam::RGBFrame sub_rgb;
+                bool sub_ok = h264dec.decode(sub_frame.data.data(), sub_frame.data.size(), sub_rgb);
+                if (!sub_ok) {
+                    if (opts.debug) {
+                        dbg_decode_fail++;
+                        dbg_decode_errors[h264dec.get_last_error()]++;
+                        decode_streak = 0;
+                        auto t = std::chrono::duration<double>(std::chrono::steady_clock::now() - start_time).count();
+                        AvccInfo avcc = check_avcc(sub_frame.data.data(), sub_frame.data.size());
+                        fprintf(stderr, "[DBG] t=%.3f RECV cam#%u[%d/%d] sz=%zu nal=0x%02X(%s) avcc=%s dec=FAIL err=\"%s\"\n",
+                                t, sub_frame.frame_num, mf_i+1, mf_count, sub_frame.data.size(),
+                                sub_frame.data.size() >= 5 ? sub_frame.data[4] : 0,
+                                avcc.nal_name, avcc.valid ? "OK" : avcc.problem,
+                                h264dec.get_last_error().c_str());
+                    }
+                    frames_dropped++;
+                    continue;
+                }
+                if (opts.debug) {
+                    dbg_decode_ok++;
+                    decode_streak++;
+                    if (decode_streak == 1) streak_start_frame = sub_frame.frame_num;
+                    if (decode_streak > max_decode_streak) {
+                        max_decode_streak = decode_streak;
+                        max_streak_start = streak_start_frame;
+                        max_streak_end = sub_frame.frame_num;
+                    }
+                    auto t = std::chrono::duration<double>(std::chrono::steady_clock::now() - start_time).count();
+                    AvccInfo avcc = check_avcc(sub_frame.data.data(), sub_frame.data.size());
+                    fprintf(stderr, "[DBG] t=%.3f RECV cam#%u[%d/%d] sz=%zu nal=0x%02X(%s) avcc=%s dec=OK streak=%d\n",
+                            t, sub_frame.frame_num, mf_i+1, mf_count, sub_frame.data.size(),
+                            sub_frame.data.size() >= 5 ? sub_frame.data[4] : 0,
+                            avcc.nal_name, avcc.valid ? "OK" : avcc.problem,
+                            decode_streak);
+                }
+                frames_received++;
+                total_bytes += static_cast<int>(sub_frame.data.size());
+                if (!has_first_frame) { first_frame_time = std::chrono::steady_clock::now(); has_first_frame = true; }
+                last_frame_time = std::chrono::steady_clock::now();
+#endif
+            }
+            // Stats for multi-frame (count the PTP call itself)
+            auto now = std::chrono::steady_clock::now();
+            if (now - last_stats >= stats_interval) {
+                auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_stats).count();
+                float fps = (elapsed_ms > 0) ? (frames_received * 1000.0f / elapsed_ms) : 0;
+                float kbps = (elapsed_ms > 0) ? (total_bytes * 8.0f / elapsed_ms) : 0;
+                float avg_sz = (frames_received > 0) ? (total_bytes / (float)frames_received / 1024.0f) : 0;
+                printf("\r[Stats] FPS: %.1f | Recv: %d | Drop: %d | Skip: %d | %.0f kbps | %.1f KB/f    \n",
+                       fps, frames_received, frames_dropped, frames_skipped, kbps, avg_sz);
+                total_received += frames_received;
+                total_dropped += frames_dropped;
+                total_skipped += frames_skipped;
+                frames_received = 0;
+                frames_dropped = 0;
+                frames_skipped = 0;
+                total_bytes = 0;
+                last_stats = now;
+            }
+            continue;
+        }
+
         // Track frame data uniqueness (simple FNV-1a hash of first 256 bytes)
         {
             uint32_t h = 0x811c9dc5;

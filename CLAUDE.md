@@ -196,40 +196,20 @@ Build:
 
 Output binary: `bridge\build\Release\chdk-webcam.exe`
 
-## Deploying CHDK to SD Card via SSH
+## Deploying CHDK to Camera via PTP Upload
 
-The SD card reader is attached to a Linux host at `192.168.0.54` (accessible as `root` via SSH).
+The bridge can upload files directly to the camera's SD card over USB (PTP), then reboot to reload firmware. No need to remove the SD card.
 
-**SSH key**: `~/.ssh/id_ed25519` (passwordless, deployed via `ssh-copy-id`). No password prompt required.
+**Prerequisites:** Camera must be powered on with CHDK running and connected via USB.
 
-**SD card device**: `/dev/mmcblk0p1` (FAT16, ~2GB)
+**Deploy and reboot:**
+```
+"C:/projects/ixus870IS/bridge/build/Release/chdk-webcam.exe" --upload "C:/projects/ixus870IS/chdk/bin/DISKBOOT.BIN" "A/DISKBOOT.BIN" --upload "C:/projects/ixus870IS/chdk/CHDK/MODULES/webcam.flt" "A/CHDK/MODULES/webcam.flt" --reboot
+```
 
-**CRITICAL: The SD card must be physically inserted into the card reader on the Linux host.
-It is NOT automatically mounted. `/mnt/sdcard` is just a directory on the root filesystem —
-writing to it without mounting first will NOT write to the SD card!**
-
-**Deployment workflow:**
-
-1. **Ask the user to insert the SD card** into the reader on the Linux host
-2. **Mount the SD card** (always ask user before mounting):
-   ```
-   ssh root@192.168.0.54 "mkdir -p /mnt/sdcard && mount /dev/mmcblk0p1 /mnt/sdcard"
-   ```
-3. **Copy files:**
-   ```
-   scp "C:/projects/ixus870IS/chdk/bin/DISKBOOT.BIN" root@192.168.0.54:/mnt/sdcard/DISKBOOT.BIN
-   scp "C:/projects/ixus870IS/chdk/CHDK/MODULES/webcam.flt" root@192.168.0.54:/mnt/sdcard/CHDK/MODULES/webcam.flt
-   ```
-4. **Verify the file is correct** (always check after deploy):
-   ```
-   ssh root@192.168.0.54 "ls -la /mnt/sdcard/CHDK/MODULES/webcam.flt && md5sum /mnt/sdcard/CHDK/MODULES/webcam.flt"
-   ```
-   Compare the MD5 with the local file: `certutil -hashfile "C:\projects\ixus870IS\chdk\CHDK\MODULES\webcam.flt" MD5`
-5. **Sync and unmount:**
-   ```
-   ssh root@192.168.0.54 "sync && umount /mnt/sdcard"
-   ```
-6. **Ask the user to move the SD card** back to the camera and power cycle
+- `--upload LOCAL REMOTE` can be repeated for multiple files. REMOTE paths use `A/` prefix for SD card root.
+- `--reboot` reboots the camera after upload so the new firmware is loaded.
+- Wait ~1 second after reboot before running the bridge again.
 
 ## Development Workflow
 
