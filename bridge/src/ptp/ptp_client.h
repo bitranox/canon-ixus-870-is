@@ -135,6 +135,15 @@ public:
     // Get last error message
     std::string get_last_error() const;
 
+    // USB error statistics
+    struct USBStats {
+        int send_errors = 0;
+        int recv_errors = 0;
+        int timeout_errors = 0;
+        int io_errors = 0;
+    };
+    USBStats get_usb_stats() const;
+
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;

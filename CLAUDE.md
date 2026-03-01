@@ -4,7 +4,7 @@
 
 - **After every bridge test**: ALWAYS ask the user for the result. Do NOT assume what happened — the user can see the camera physically. Wait for their response.
 - **Document and commit BEFORE any code changes**: After receiving test results from the user, FIRST update docs with the findings, THEN commit. Only AFTER the commit may you proceed with further code changes.
-- **Run bridge with `--timeout 20 --no-preview --no-webcam`** during firmware development (graceful shutdown after 20s, no virtual webcam needed).
+- **Run bridge with `--debug --timeout 10 --no-preview --no-webcam`** during firmware development (per-frame debug logging, graceful shutdown after 10s, no virtual webcam needed).
 - **Commit after each bridge test** with a message that describes what was tested and what the result was.
 - **Use the debug frame protocol** (`spy_debug_reset/add/send`) in `movie_rec.c` for all camera→bridge diagnostic output. Do NOT inject debug data into H.264 frames. See [Debug Frame Protocol](docs/debug-frame-protocol.md) for API reference and payload format.
 - **No double indirection in movie_rec.c**: NEVER dereference a pointer read from another pointer (e.g. `*(*(0xFF93050C) + 0xC4)`). The ARM compiler generates code that crashes the camera. Use hardcoded addresses instead. The ring buffer struct is always at `0x8968` — see [v22b in dev log](docs/webcam-development-log.md) for the address table.
@@ -232,9 +232,9 @@ writing to it without mounting first will NOT write to the SD card!**
 
 ## Development Workflow
 
-**Run the bridge with timeout** during camera firmware development. Always use `--timeout 20` so the bridge exits gracefully after 20 seconds — this ensures `stop_webcam()` runs and the camera stops recording. Without `--timeout`, killing the bridge (e.g. from Claude Code background bash) skips cleanup and the camera keeps recording indefinitely.
+**Run the bridge with debug and timeout** during camera firmware development. Always use `--debug` for per-frame diagnostic logging to stderr, and `--timeout 10` so the bridge exits gracefully after 10 seconds — this ensures `stop_webcam()` runs and the camera stops recording. Without `--timeout`, killing the bridge (e.g. from Claude Code background bash) skips cleanup and the camera keeps recording indefinitely.
 ```
-"C:/projects/ixus870IS/bridge/build/Release/chdk-webcam.exe" --timeout 20 --no-preview --no-webcam
+"C:/projects/ixus870IS/bridge/build/Release/chdk-webcam.exe" --debug --timeout 10 --no-preview --no-webcam
 ```
 
 **After each bridge test run, document the findings and commit all modified files** with a descriptive message documenting the current approach and test results. This ensures we can always revert to a known working state when regressions happen. Include `movie_rec.c` (untracked, must be `git add`'d explicitly) in commits since it contains the spy buffer hooks.

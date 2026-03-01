@@ -24,6 +24,24 @@ struct PTPClient::Impl {
     std::string last_error;
     CameraInfo camera_info{};
 
+    // USB error counters
+    int usb_send_errors = 0;
+    int usb_recv_errors = 0;
+    int usb_timeout_errors = 0;
+    int usb_io_errors = 0;
+
+    void classify_usb_error(int libusb_rc, bool is_send) {
+        if (libusb_rc == LIBUSB_ERROR_TIMEOUT) {
+            usb_timeout_errors++;
+        } else if (libusb_rc == LIBUSB_ERROR_IO) {
+            usb_io_errors++;
+        } else if (is_send) {
+            usb_send_errors++;
+        } else {
+            usb_recv_errors++;
+        }
+    }
+
     // PTP session
     uint32_t session_id = 1;
 
@@ -172,6 +190,7 @@ struct PTPClient::Impl {
         int transferred = 0;
         int r = libusb_bulk_transfer(handle, ep_out, buf, len, &transferred, USB_TIMEOUT);
         if (r < 0) {
+            classify_usb_error(r, true);
             last_error = "USB send error: " + std::string(libusb_strerror(static_cast<libusb_error>(r)));
             return false;
         }
@@ -188,6 +207,7 @@ struct PTPClient::Impl {
         // First read: may contain data or response
         int r = libusb_bulk_transfer(handle, ep_in, buf.data(), MAX_BUF, &transferred, timeout_ms);
         if (r < 0) {
+            classify_usb_error(r, false);
             last_error = "USB receive error: " + std::string(libusb_strerror(static_cast<libusb_error>(r)));
             return false;
         }
@@ -222,7 +242,8 @@ struct PTPClient::Impl {
             while (total_read < data_total) {
                 r = libusb_bulk_transfer(handle, ep_in, buf.data(), MAX_BUF, &transferred, timeout_ms);
                 if (r < 0) {
-                    last_error = "USB data receive error";
+                    classify_usb_error(r, false);
+                    last_error = "USB data receive error: " + std::string(libusb_strerror(static_cast<libusb_error>(r)));
                     return false;
                 }
                 uint32_t to_copy = std::min(static_cast<uint32_t>(transferred), data_total - total_read);
@@ -235,7 +256,8 @@ struct PTPClient::Impl {
             // Now read the actual response
             r = libusb_bulk_transfer(handle, ep_in, buf.data(), MAX_BUF, &transferred, timeout_ms);
             if (r < 0) {
-                last_error = "USB response receive error";
+                classify_usb_error(r, false);
+                last_error = "USB response receive error: " + std::string(libusb_strerror(static_cast<libusb_error>(r)));
                 return false;
             }
             if (transferred < PTP_HEADER_SIZE) {
@@ -932,6 +954,15 @@ bool PTPClient::read_memory(uint32_t address, uint32_t size, std::vector<uint8_t
 
 std::string PTPClient::get_last_error() const {
     return impl_->last_error;
+}
+
+PTPClient::USBStats PTPClient::get_usb_stats() const {
+    USBStats s;
+    s.send_errors = impl_->usb_send_errors;
+    s.recv_errors = impl_->usb_recv_errors;
+    s.timeout_errors = impl_->usb_timeout_errors;
+    s.io_errors = impl_->usb_io_errors;
+    return s;
 }
 
 } // namespace ptp

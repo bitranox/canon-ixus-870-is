@@ -33,6 +33,8 @@
 #include <thread>
 #include <csignal>
 #include <string>
+#include <map>
+#include <climits>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -118,8 +120,50 @@ struct Options {
     bool no_preview = false;
     bool no_decode = false;
     bool verbose = false;
+    bool debug = false;
     int timeout_sec = 0;
 };
+
+// AVCC frame validation
+struct AvccInfo {
+    bool valid;
+    uint8_t nal_type;
+    const char* nal_name;
+    uint32_t avcc_len;
+    const char* problem;  // null if OK
+};
+
+static AvccInfo check_avcc(const uint8_t* data, size_t size) {
+    AvccInfo info = { false, 0, "?", 0, nullptr };
+    if (size < 5) {
+        info.problem = "too_short(<5)";
+        return info;
+    }
+    info.avcc_len = ((uint32_t)data[0] << 24) | ((uint32_t)data[1] << 16) |
+                    ((uint32_t)data[2] << 8) | (uint32_t)data[3];
+    bool forbidden = (data[4] & 0x80) != 0;
+    info.nal_type = data[4] & 0x1F;
+    switch (info.nal_type) {
+        case 1:  info.nal_name = "P"; break;
+        case 5:  info.nal_name = "IDR"; break;
+        case 6:  info.nal_name = "SEI"; break;
+        case 7:  info.nal_name = "SPS"; break;
+        case 8:  info.nal_name = "PPS"; break;
+        default: info.nal_name = "?"; break;
+    }
+    if (forbidden) {
+        info.problem = "forbidden_bit";
+    } else if (info.avcc_len == 0) {
+        info.problem = "zero_len";
+    } else if (info.avcc_len > size) {
+        info.problem = "len_overflow";
+    } else if (info.nal_type == 0 || info.nal_type > 12) {
+        info.problem = "bad_nal_type";
+    } else {
+        info.valid = true;
+    }
+    return info;
+}
 
 static void print_usage(const char* prog) {
     fprintf(stderr,
@@ -139,6 +183,7 @@ static void print_usage(const char* prog) {
         "  --no-preview        Skip preview window\n"
         "  --no-decode         Skip H.264 decode (measure raw PTP throughput)\n"
         "  --verbose           Show per-frame statistics\n"
+        "  --debug             Per-frame CSV debug logging to stderr\n"
         "  --timeout N         Exit after N seconds (graceful shutdown)\n"
         "  --help              Show this help\n"
         "\n"
@@ -173,6 +218,8 @@ static Options parse_args(int argc, char* argv[]) {
             opts.no_decode = true;
         } else if (arg == "--verbose") {
             opts.verbose = true;
+        } else if (arg == "--debug") {
+            opts.debug = true;
         } else if (arg == "--timeout" && i + 1 < argc) {
             opts.timeout_sec = atoi(argv[++i]);
         } else if (arg == "--help") {
@@ -315,6 +362,29 @@ int main(int argc, char* argv[]) {
     std::chrono::steady_clock::time_point last_frame_time;
     bool has_first_frame = false;
 
+    // Debug mode tracking
+    int dbg_ptp_calls = 0;           // total get_frame() calls
+    int dbg_ptp_success = 0;         // calls that returned a frame
+    int dbg_ptp_noframe = 0;         // calls that returned no frame
+    int dbg_decode_attempts = 0;
+    int dbg_decode_ok = 0;
+    int dbg_decode_fail = 0;
+    int dbg_nal_idr = 0;
+    int dbg_nal_p = 0;
+    int dbg_nal_sei = 0;
+    int dbg_nal_other = 0;
+    int dbg_avcc_valid = 0;
+    int dbg_avcc_invalid = 0;
+    int decode_streak = 0;
+    int max_decode_streak = 0;
+    int streak_start_frame = 0;
+    int max_streak_start = 0;
+    int max_streak_end = 0;
+    int64_t dbg_total_frame_bytes = 0;
+    int dbg_min_frame_size = INT_MAX;
+    int dbg_max_frame_size = 0;
+    std::map<std::string, int> dbg_decode_errors;  // error string -> count
+
     while (g_running) {
         // Check timeout
         if (opts.timeout_sec > 0) {
@@ -338,6 +408,12 @@ int main(int argc, char* argv[]) {
         ptp::MJPEGFrame mjpeg;
         if (!client.get_frame(mjpeg)) {
             frames_dropped++;
+            if (opts.debug) {
+                dbg_ptp_calls++;
+                dbg_ptp_noframe++;
+                auto t = std::chrono::duration<double>(std::chrono::steady_clock::now() - start_time).count();
+                fprintf(stderr, "[DBG] t=%.3f DROP err=\"%s\"\n", t, client.get_last_error().c_str());
+            }
             // Print stats even when all frames drop
             auto now_check = std::chrono::steady_clock::now();
             if (now_check - last_stats >= stats_interval) {
@@ -365,8 +441,14 @@ int main(int argc, char* argv[]) {
         if (last_frame_num != 0 && mjpeg.frame_num > last_frame_num + 1) {
             int gap = mjpeg.frame_num - last_frame_num - 1;
             frames_skipped += gap;
-            fprintf(stderr, "FRAME GAP: %d frames lost (cam #%u -> #%u)\n",
-                    gap, last_frame_num, mjpeg.frame_num);
+            if (opts.debug) {
+                auto t = std::chrono::duration<double>(std::chrono::steady_clock::now() - start_time).count();
+                fprintf(stderr, "[DBG] t=%.3f GAP lost=%d cam#%u->cam#%u\n",
+                        t, gap, last_frame_num, mjpeg.frame_num);
+            } else {
+                fprintf(stderr, "FRAME GAP: %d frames lost (cam #%u -> #%u)\n",
+                        gap, last_frame_num, mjpeg.frame_num);
+            }
         }
         last_frame_num = mjpeg.frame_num;
 
@@ -561,6 +643,27 @@ int main(int argc, char* argv[]) {
             prev_data_hash = h;
         }
 
+        // Debug mode: track per-frame stats (common to both decode and no-decode paths)
+        if (opts.debug) {
+            dbg_ptp_calls++;
+            dbg_ptp_success++;
+            int sz = static_cast<int>(mjpeg.data.size());
+            dbg_total_frame_bytes += sz;
+            if (sz < dbg_min_frame_size) dbg_min_frame_size = sz;
+            if (sz > dbg_max_frame_size) dbg_max_frame_size = sz;
+
+            if (mjpeg.format == ptp::FRAME_FMT_H264) {
+                AvccInfo avcc = check_avcc(mjpeg.data.data(), mjpeg.data.size());
+                if (avcc.valid) dbg_avcc_valid++; else dbg_avcc_invalid++;
+                switch (avcc.nal_type) {
+                    case 5: dbg_nal_idr++; break;
+                    case 1: dbg_nal_p++; break;
+                    case 6: dbg_nal_sei++; break;
+                    default: dbg_nal_other++; break;
+                }
+            }
+        }
+
         // --no-decode: skip all decode/display, just count raw PTP throughput
         if (opts.no_decode) {
             frames_received++;
@@ -589,11 +692,22 @@ int main(int argc, char* argv[]) {
                                   && avcc_len > 0 && avcc_len <= mjpeg.data.size();
                 static int valid_count = 0, invalid_count = 0;
                 if (valid_avcc) valid_count++; else invalid_count++;
-                if (frames_received <= 10 || frames_received % 50 == 0) {
+                if (!opts.debug && (frames_received <= 10 || frames_received % 50 == 0)) {
                     fprintf(stderr, "  [no-decode #%d] %zu bytes, NAL=%d, avcc_len=%u, %s  (valid:%d invalid:%d)\n",
                             frames_received, mjpeg.data.size(), nal_type, avcc_len,
                             valid_avcc ? "OK" : "BAD", valid_count, invalid_count);
                 }
+            }
+
+            // Debug per-frame line (no-decode path)
+            if (opts.debug && mjpeg.format == ptp::FRAME_FMT_H264) {
+                auto t = std::chrono::duration<double>(std::chrono::steady_clock::now() - start_time).count();
+                AvccInfo avcc = check_avcc(mjpeg.data.data(), mjpeg.data.size());
+                fprintf(stderr, "[DBG] t=%.3f RECV cam#%u sz=%zu nal=0x%02X(%s) avcc=%s\n",
+                        t, mjpeg.frame_num, mjpeg.data.size(),
+                        mjpeg.data.size() >= 5 ? mjpeg.data[4] : 0,
+                        avcc.nal_name,
+                        avcc.valid ? "OK" : avcc.problem);
             }
 
             // Print stats periodically
@@ -620,12 +734,44 @@ int main(int argc, char* argv[]) {
         // Decode frame (JPEG, raw UYVY, or H.264)
         webcam::RGBFrame rgb;
         bool decode_ok;
+        std::string decode_err;
         if (mjpeg.format == ptp::FRAME_FMT_H264) {
 #ifdef HAS_FFMPEG
+            if (opts.debug) dbg_decode_attempts++;
             decode_ok = h264dec.decode(mjpeg.data.data(), mjpeg.data.size(), rgb);
             if (!decode_ok) {
+                decode_err = h264dec.get_last_error();
+                if (opts.debug) {
+                    dbg_decode_fail++;
+                    dbg_decode_errors[decode_err]++;
+                    decode_streak = 0;
+                    auto t = std::chrono::duration<double>(std::chrono::steady_clock::now() - start_time).count();
+                    AvccInfo avcc = check_avcc(mjpeg.data.data(), mjpeg.data.size());
+                    fprintf(stderr, "[DBG] t=%.3f RECV cam#%u sz=%zu nal=0x%02X(%s) avcc=%s dec=FAIL err=\"%s\" streak=0\n",
+                            t, mjpeg.frame_num, mjpeg.data.size(),
+                            mjpeg.data.size() >= 5 ? mjpeg.data[4] : 0,
+                            avcc.nal_name, avcc.valid ? "OK" : avcc.problem,
+                            decode_err.c_str());
+                }
                 frames_dropped++;
                 continue;
+            }
+            if (opts.debug) {
+                dbg_decode_ok++;
+                decode_streak++;
+                if (decode_streak == 1) streak_start_frame = mjpeg.frame_num;
+                if (decode_streak > max_decode_streak) {
+                    max_decode_streak = decode_streak;
+                    max_streak_start = streak_start_frame;
+                    max_streak_end = mjpeg.frame_num;
+                }
+                auto t = std::chrono::duration<double>(std::chrono::steady_clock::now() - start_time).count();
+                AvccInfo avcc = check_avcc(mjpeg.data.data(), mjpeg.data.size());
+                fprintf(stderr, "[DBG] t=%.3f RECV cam#%u sz=%zu nal=0x%02X(%s) avcc=%s dec=OK streak=%d\n",
+                        t, mjpeg.frame_num, mjpeg.data.size(),
+                        mjpeg.data.size() >= 5 ? mjpeg.data[4] : 0,
+                        avcc.nal_name, avcc.valid ? "OK" : avcc.problem,
+                        decode_streak);
             }
 #else
             static int h264_count = 0;
@@ -637,17 +783,41 @@ int main(int argc, char* argv[]) {
             continue;
 #endif
         } else if (mjpeg.format == ptp::FRAME_FMT_UYVY) {
+            if (opts.debug) dbg_decode_attempts++;
             decode_ok = processor.process_uyvy(mjpeg.data.data(), static_cast<int>(mjpeg.data.size()),
                                                mjpeg.width, mjpeg.height, rgb);
         } else {
+            if (opts.debug) dbg_decode_attempts++;
             decode_ok = processor.process(mjpeg.data.data(), static_cast<int>(mjpeg.data.size()), rgb);
         }
         if (!decode_ok) {
+            decode_err = processor.get_last_error();
             if (opts.verbose) {
-                fprintf(stderr, "Decode error: %s\n", processor.get_last_error().c_str());
+                fprintf(stderr, "Decode error: %s\n", decode_err.c_str());
+            }
+            if (opts.debug) {
+                dbg_decode_fail++;
+                dbg_decode_errors[decode_err]++;
+                decode_streak = 0;
+                auto t = std::chrono::duration<double>(std::chrono::steady_clock::now() - start_time).count();
+                fprintf(stderr, "[DBG] t=%.3f RECV cam#%u sz=%zu dec=FAIL err=\"%s\" streak=0\n",
+                        t, mjpeg.frame_num, mjpeg.data.size(), decode_err.c_str());
             }
             frames_dropped++;
             continue;
+        }
+        if (opts.debug && mjpeg.format != ptp::FRAME_FMT_H264) {
+            dbg_decode_ok++;
+            decode_streak++;
+            if (decode_streak == 1) streak_start_frame = mjpeg.frame_num;
+            if (decode_streak > max_decode_streak) {
+                max_decode_streak = decode_streak;
+                max_streak_start = streak_start_frame;
+                max_streak_end = mjpeg.frame_num;
+            }
+            auto t = std::chrono::duration<double>(std::chrono::steady_clock::now() - start_time).count();
+            fprintf(stderr, "[DBG] t=%.3f RECV cam#%u sz=%zu dec=OK streak=%d\n",
+                    t, mjpeg.frame_num, mjpeg.data.size(), decode_streak);
         }
 
         // Send to virtual webcam
@@ -736,6 +906,49 @@ int main(int argc, char* argv[]) {
         printf("  Camera produced: ~%u frames\n", last_frame_num);
     }
     printf("=======================\n");
+
+    if (opts.debug) {
+        auto usb = client.get_usb_stats();
+        fprintf(stderr, "\n=== DEBUG SUMMARY ===\n");
+        fprintf(stderr, "  PTP calls:    %d (%d success, %d no-frame)\n",
+                dbg_ptp_calls, dbg_ptp_success, dbg_ptp_noframe);
+        if (dbg_decode_attempts > 0) {
+            fprintf(stderr, "  Decode:       %d attempts, %d OK (%.1f%%), %d FAIL\n",
+                    dbg_decode_attempts, dbg_decode_ok,
+                    dbg_decode_attempts > 0 ? (100.0 * dbg_decode_ok / dbg_decode_attempts) : 0.0,
+                    dbg_decode_fail);
+            if (!dbg_decode_errors.empty()) {
+                fprintf(stderr, "  Decode errors:");
+                for (auto& kv : dbg_decode_errors) {
+                    fprintf(stderr, " \"%s\": %d", kv.first.c_str(), kv.second);
+                    if (&kv != &*dbg_decode_errors.rbegin())
+                        fprintf(stderr, ",");
+                }
+                fprintf(stderr, "\n");
+            }
+        }
+        fprintf(stderr, "  NAL types:    IDR: %d, P-frame: %d, SEI: %d, other: %d\n",
+                dbg_nal_idr, dbg_nal_p, dbg_nal_sei, dbg_nal_other);
+        int total_avcc = dbg_avcc_valid + dbg_avcc_invalid;
+        if (total_avcc > 0) {
+            fprintf(stderr, "  AVCC valid:   %d/%d (%.1f%%)\n",
+                    dbg_avcc_valid, total_avcc,
+                    100.0 * dbg_avcc_valid / total_avcc);
+        }
+        if (max_decode_streak > 0) {
+            fprintf(stderr, "  Max streak:   %d (cam#%d-cam#%d)\n",
+                    max_decode_streak, max_streak_start, max_streak_end);
+        }
+        fprintf(stderr, "  USB errors:   send=%d recv=%d timeout=%d io=%d\n",
+                usb.send_errors, usb.recv_errors, usb.timeout_errors, usb.io_errors);
+        if (dbg_ptp_success > 0) {
+            fprintf(stderr, "  Frame sizes:  min=%d max=%d avg=%lld\n",
+                    dbg_min_frame_size == INT_MAX ? 0 : dbg_min_frame_size,
+                    dbg_max_frame_size,
+                    dbg_ptp_success > 0 ? dbg_total_frame_bytes / dbg_ptp_success : 0LL);
+        }
+        fprintf(stderr, "=====================\n");
+    }
 
     printf("\nStopping...\n");
     if (g_debug_log) { fclose(g_debug_log); g_debug_log = nullptr; }
