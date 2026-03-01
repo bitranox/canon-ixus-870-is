@@ -2537,3 +2537,44 @@ The NALT debug frames showed `0xFF` (255) — this is the raw first byte of the 
 
 ### Remaining Issue: USB Connection Dies After ~2s
 USB timeouts start at t=2.0s and never recover. The camera produced 49 frames in 2 seconds then the USB connection died. This is the main bottleneck — not IDR availability. Bridge received 47 of 49 frames (96% capture rate) during the 2s window.
+
+## v31b — Error Path Bypass: Full 10s Recording (2026-03-01)
+
+### Problem
+Camera stops recording after ~2s. Root cause: the error path in sub_FF85D98C_my fires when `[SP,#0x38]` is non-zero (JPCORE callback hasn't written success yet after spy_take_sem_short masks the timeout). This triggers sub_FF930358 (drain) + STATE=1, permanently killing the pipeline (proven fact #14).
+
+### Fix
+Added `spy_skip_error_path()` — checks webcam magic at 0xFF000. When webcam is active, all 4 error blocks skip sub_FF930358 + STATE=1 and jump to JPCORE cleanup (sub_FF8EDC88) + exit. The encode completes asynchronously and the next frame processes normally.
+
+**Error blocks patched:**
+1. loc_FF85DBA4 (shared TakeSemaphore timeout)
+2. loc_FF85DBC0 (shared [SP,#0x38] encode error)
+3. Inline continuation chunk timeout (~line 474)
+4. Inline continuation chunk encode error (~line 487)
+
+**Bypass labels:**
+- `spy_err_bypass_1`: sub_FF8EDC88(1) + exit (first chunk errors)
+- `spy_err_bypass_2`: sub_FF8EDC88(0) + exit (continuation chunk errors)
+
+### Test Results (10s session)
+```
+=== SESSION SUMMARY ===
+  Received: 192 frames
+  Decoded FPS: 19.2
+  Total FPS (incl. drops): 27.6
+  Camera produced: ~226 frames
+  Duration: 10.0 seconds
+=== DEBUG SUMMARY ===
+  Decode: 215 attempts, 192 OK (89.3%), 23 FAIL
+  NAL types: IDR: 18, P-frame: 197
+  AVCC valid: 215/215 (100.0%)
+  Max streak: 75 (cam#148-cam#226)
+  USB errors: send=0 recv=0 timeout=0 io=0
+```
+
+### Analysis
+- Camera recorded **full 10 seconds** — no more early death
+- 18 IDRs in 10s (~1.8/sec), consistent GOP ~12 frames
+- 23 decode failures clustered at t=2.0s, t=4.0s, t=6.0s — these occur when the bridge misses an IDR due to seqlock overwrite, then all P-frames until the next IDR fail to decode
+- Max decode streak 75 frames (cam#148-cam#226) = 7.5 seconds of unbroken video
+- 0 USB errors, 0 frame gaps — rock-solid transport

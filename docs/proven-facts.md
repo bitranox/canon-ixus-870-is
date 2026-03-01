@@ -200,6 +200,11 @@ Our patch accepts STATE 3 or 4 (original firmware only accepts 4).
 After normal startup, the callback is permanently 0xFF85DD14 (BX LR). When the error path sets STATE=1, no callback will ever promote it back to 3 or 4. All subsequent msg 6 calls check `STATE == 3 || STATE == 4` and fall through (skip all frame processing).
 **Implication**: The error path (sub_FF930358 + STATE=1) must NEVER fire during webcam operation. A single error permanently kills the pipeline for the rest of the recording session.
 
+### 16. Error path bypass keeps pipeline alive indefinitely
+**Evidence**: v31b added `spy_skip_error_path()` check at all 4 error blocks in sub_FF85D98C_my. When webcam is active, skips sub_FF930358 (drain) + STATE=1 assignment, calls sub_FF8EDC88 (JPCORE cleanup) and continues. Result: camera recorded full 10s session (192 decoded, 19.2fps, 18 IDRs, 0 USB errors). Previously died after ~2s.
+**Mechanism**: The error paths fire when `[SP,#0x38]` is non-zero (JPCORE callback hasn't written success yet due to spy_take_sem_short masking the timeout). Bypassing the drain + STATE=1 lets the pipeline continue — the JPCORE encode completes asynchronously and the next frame processes normally.
+**Implication**: The error path bypass is safe because: (1) no SD writes to corrupt, (2) ring buffer flows via +0x80=0, (3) sub_FF8EDC88 cleans up JPCORE state, (4) encode completes asynchronously.
+
 ### 15. JPCORE semaphore signaling chain
 **Evidence**: Full trace from v31 decompilation:
 1. sub_FF8EDBE0 stores &[SP,#0x38] at encode_state+0x60
@@ -253,17 +258,17 @@ PTP USB transfer → bridge → FFmpeg decode → virtual webcam
 
 | Metric | Value | Evidence |
 |--------|-------|----------|
-| Frames produced | 49 in 2s (~25 fps) | v31a bridge output (USB died at 2s) |
-| Frames decoded | 47 (100%) | v31a: 47/47, zero decode failures |
-| Decoded FPS | 23.5 fps | v31a: measured first-to-last frame |
-| Total FPS (incl. drops) | 31.2 fps | v31a bridge output |
-| IDR keyframes | 5 in 2s (~2.5/sec, GOP ~11) | v31a: IDRs at cam#2,15,26,37,49 |
-| Average bitrate | ~8 Mbps | v30c bridge output |
+| Frames produced | 226 in 10s (~23 fps) | v31b bridge output (full 10s session) |
+| Frames decoded | 192 (89.3%) | v31b: 192/215 unique frames decoded |
+| Decoded FPS | 19.2 fps | v31b: measured first-to-last frame |
+| Total FPS (incl. drops) | 27.6 fps | v31b bridge output |
+| IDR keyframes | 18 in 10s (~1.8/sec, GOP ~12) | v31b bridge output |
+| Average bitrate | ~8 Mbps | v31b bridge output |
 | SD card writes | 0 bytes | 0-byte MOV file, SD usage unchanged |
-| Frame loss source | Seqlock overwrites + decode failures | ~2fps seqlock loss, ~4fps decode loss |
+| Frame loss source | Seqlock overwrites → missed IDRs → decode failures | 23 decode failures clustered after missed IDRs |
 
 ## What Needs to Happen Next
 
-1. **Fix periodic gaps**: Implement error path bypass when webcam is active. When [SP,#0x38] is non-zero or TakeSemaphore times out, skip sub_FF930358 + STATE=1 and fall through to normal cleanup. This prevents the permanent pipeline death caused by the error path.
-2. **Evaluate spy_take_sem_short**: With the corrected understanding that TakeSemaphore waits for JPCORE encode (~1-5ms), the 50ms/500ms timeout may be unnecessary. Consider removing the short timeout entirely and using the original 1000ms timeout, since JPCORE encode should always complete quickly.
+1. **Reduce decode failures from missed IDRs**: The 10.7% decode loss comes from seqlock overwrites that skip IDR frames. When the bridge misses an IDR, all P-frames until the next IDR fail to decode. Options: increase IDR frequency on camera, or add bridge-side IDR re-injection for these gaps.
+2. **Evaluate spy_take_sem_short**: With the corrected understanding that TakeSemaphore waits for JPCORE encode (~1-5ms), the 50ms timeout may be unnecessary. Consider using the original 1000ms timeout, since JPCORE encode should always complete quickly.
 3. **Virtual webcam integration**: Connect the H.264 decode output to a DirectShow virtual webcam filter for use in video conferencing apps.
