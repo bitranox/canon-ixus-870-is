@@ -166,25 +166,46 @@ static void __attribute__((used,noinline)) spy_ring_write(unsigned char *ptr, un
         // it skips the write but still updates the consumed pointer.
         *(volatile unsigned int *)0x89E8 = 0;
 
-        // Dual-slot seqlock: alternate between slot A (hdr[1..3]) and
-        // slot B (hdr[4..6]). At 30fps the camera produces a frame every
-        // ~33ms but bridge PTP round-trip is ~36ms, so two frames often
-        // arrive during one poll cycle. With one slot the older frame is
-        // lost; with two slots they go to different slots and both survive.
+        // Determine actual H.264 frame size from AVCC length prefix.
+        // MovieFrameGetter returns the 256KB chunk size, not encoded size.
+        // Parse AVCC: [4-byte BE length][NAL data], possibly 2 NALs (SEI+slice).
         {
-            static int slot = 0;
-            if (slot == 0) {
-                hdr[3]++;
-                hdr[1] = (unsigned int)ptr;
-                hdr[2] = size;
-                hdr[3]++;
-            } else {
-                hdr[6]++;
-                hdr[4] = (unsigned int)ptr;
-                hdr[5] = size;
-                hdr[6]++;
+            unsigned int actual = size;
+            if (size >= 5) {
+                unsigned int n = ((unsigned int)ptr[0] << 24)
+                               | ((unsigned int)ptr[1] << 16)
+                               | ((unsigned int)ptr[2] << 8) | ptr[3];
+                if (n > 0 && n < 120000) {
+                    actual = 4 + n;
+                    // Check for second NAL (e.g. SEI + slice)
+                    if (actual + 5 <= size) {
+                        unsigned int n2 = ((unsigned int)ptr[actual] << 24)
+                                        | ((unsigned int)ptr[actual+1] << 16)
+                                        | ((unsigned int)ptr[actual+2] << 8)
+                                        | ptr[actual+3];
+                        if (n2 > 0 && n2 < 120000)
+                            actual += 4 + n2;
+                    }
+                }
             }
-            slot ^= 1;
+
+            // Dual-slot seqlock: alternate between slot A (hdr[1..3]) and
+            // slot B (hdr[4..6]). Store actual encoded size, not chunk size.
+            {
+                static int slot = 0;
+                if (slot == 0) {
+                    hdr[3]++;
+                    hdr[1] = (unsigned int)ptr;
+                    hdr[2] = actual;
+                    hdr[3]++;
+                } else {
+                    hdr[6]++;
+                    hdr[4] = (unsigned int)ptr;
+                    hdr[5] = actual;
+                    hdr[6]++;
+                }
+                slot ^= 1;
+            }
         }
     }
 }

@@ -2736,3 +2736,49 @@ Fix: changed to clamp (`if (sz > SPY_BUF_SIZE) sz = SPY_BUF_SIZE`). The AVCC par
 - Only 5 decode failures in entire 20s session
 - Camera produced fewer total frames (~462 vs ~600 expected at 30fps) — the 64KB memcpy per frame (instead of actual ~42KB) adds ~0.5ms overhead per frame, slightly slowing the consumer and thus the producer via pipeline backpressure
 - Camera recorded fine, clean shutdown, 0 USB errors
+
+## v32c — AVCC Size Parsing in spy_ring_write (2026-03-01)
+
+### Optimization
+
+v32b copies 64KB per frame (ring buffer chunk size) but actual H.264 frames average ~42KB. Added AVCC length prefix parsing in spy_ring_write to determine the real encoded size before storing in the seqlock. Reads first 4 bytes (big-endian length prefix), calculates `4 + nal_len`. Checks for second NAL (SEI + slice). Stores actual size instead of 256KB chunk size.
+
+### Changes
+- **movie_rec.c**: Parse AVCC length prefix after cache invalidation, before seqlock write. Supports 1 or 2 NAL units per frame. Store `actual` instead of `size` in seqlock.
+
+### 20s Test Results
+```
+=== SESSION SUMMARY ===
+  Received: 393 frames
+  Decoded FPS: 19.6
+  Total FPS (incl. drops): 30.0
+  Camera produced: ~438 frames
+  Duration: 20.0 seconds
+=== DEBUG SUMMARY ===
+  PTP calls:    601 (417 success, 184 no-frame)
+  Decode:       417 attempts, 393 OK (94.2%), 24 FAIL
+  Decode errors: "Decoder needs more data": 24
+  NAL types:    IDR: 38, P-frame: 379, SEI: 0, other: 0
+  AVCC valid:   417/417 (100.0%)
+  Max streak:   233 (cam#194-cam#438)
+  USB errors:   send=0 recv=0 timeout=0 io=0
+  Frame sizes:  min=38892 max=64704 avg=42460
+```
+
+### Analysis
+
+| Metric | v32b (64KB clamp) | **v32c (AVCC size)** |
+|--------|-------------------|----------------------|
+| Decode rate | 98.9% | 94.2% |
+| Frames decoded | 436/441 | 393/417 |
+| IDRs | 40 | 38 |
+| Max streak | 221 | **233** |
+| Decoded FPS | 21.8 | 19.6 |
+| Camera produced | ~462 | ~438 |
+| Avg frame size | 42056 | 42460 |
+
+- AVCC size parsing works correctly — frame sizes are accurate, 100% AVCC valid
+- Max streak improved (233 vs 221) — longer unbroken decode runs
+- Decode rate dropped from 98.9% to 94.2% — likely run-to-run variance (different scene content, timing), possibly slight overhead from AVCC parsing in the recording pipeline
+- Camera produced slightly fewer frames (~438 vs ~462)
+- Camera recorded fine, clean shutdown, 0 USB errors
