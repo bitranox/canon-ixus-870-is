@@ -2611,3 +2611,26 @@ Reverted spy_take_sem_short to a simple passthrough — calls real TakeSemaphore
 - 20 IDRs in 10s (~2/sec), consistent GOP ~12
 - 0 USB errors — stable transport
 - The error path bypass (v31b) remains as safety net but no longer fires regularly
+
+### 20s Extended Test
+```
+=== SESSION SUMMARY ===
+  Received: 250 frames
+  Decoded FPS: 12.5
+  Total FPS (incl. drops): 27.7
+  Camera produced: ~389 frames
+  Duration: 19.9 seconds
+=== DEBUG SUMMARY ===
+  Decode: 368 attempts, 250 OK (67.9%), 118 FAIL
+  NAL types: IDR: 25, P-frame: 343
+  AVCC valid: 368/368 (100.0%)
+  Max streak: 44 (cam#218-cam#263)
+  USB errors: send=0 recv=0 timeout=0 io=0
+```
+
+- **Full 20 seconds** — camera recorded entire session, 0 USB errors, 0 crashes
+- Decode rate dropped from 96.2% (10s) to 67.9% (20s) — more IDRs missed via seqlock overwrites over time
+- 25 IDRs in 20s (~1.25/sec) — lower than the 10s test's ~2/sec, suggesting some IDRs are produced but missed by the bridge
+- Each missed IDR causes ~10-12 consecutive decode failures until the next IDR arrives
+- The 1000ms timeout fix is confirmed stable for extended sessions
+- Remaining bottleneck is purely bridge-side: seqlock polling misses IDR frames
