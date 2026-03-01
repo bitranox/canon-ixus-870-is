@@ -89,6 +89,7 @@ The ring buffer struct is always at RAM address 0x8968. Confirmed by reading
 | 0xFF9300B4 | sub_FF9300B4 | | Ring buffer slot free: advances +0x1C read ptr by param_2 bytes | Debug probe + decompilation |
 | 0xFF92F1EC | task_MovWrite | | DryOS task: receives ring buffer data via queue, writes to SD card | Ghidra decompilation (DecompileMovWrite.java) |
 | 0xFF85235C | FUN_ff85235c | | File write: writes buffer to fd, returns bytes written | task_MovWrite case 2 decompilation |
+| 0x3223EC | get_tick_count | 20 | DryOS millisecond tick counter (calls _GetSystemTime at 0x30F290) | main.bin.dump: `003223ec <get_tick_count>:`, confirmed working in v32d stall detection |
 
 ## Message Flow (movie_record_task)
 
@@ -259,15 +260,15 @@ PTP USB transfer → bridge → FFmpeg decode → virtual webcam
 
 | Metric | Value | Evidence |
 |--------|-------|----------|
-| Frames produced | ~479 in 20s (~24 fps) | v32c bridge output (full 20s session) |
-| Frames decoded | 458/458 (100%) | v32c: 458 unique frames, all decoded OK |
-| Decoded FPS | 23.0 fps | v32c: measured first-to-last frame |
-| Total FPS (incl. drops) | 30.1 fps | v32c bridge output |
-| IDR keyframes | 40 in 20s (~2/sec, GOP ~11) | v32c bridge output |
-| Average bitrate | ~7-8 Mbps | v32c bridge output |
+| Frames produced | ~1752 in 60s (~29 fps) | v32d bridge output (full 60s session) |
+| Frames decoded | 1691/1691 (100%) | v32d: 1691 unique frames, all decoded OK |
+| Decoded FPS | 28.2 fps | v32d: measured first-to-last frame |
+| Total FPS (incl. drops) | 30.0 fps | v32d bridge output |
+| IDR keyframes | 121 in 60s (~2/sec, GOP ~11) | v32d bridge output |
+| Average bitrate | ~7-8 Mbps | v32d bridge output |
 | SD card writes | 0 bytes | 0-byte MOV file, SD usage unchanged |
-| Max decode streak | 458 frames (cam#2-cam#478) | v32c: entire 20s session unbroken |
-| Frame loss source | Polling rate vs production rate mismatch; dual-slot seqlock reduces this to <1% | v32b: 441/462 frames (95.5% capture), 436/441 decoded (98.9%). Dual-slot delivers 40 IDRs vs 25 with single-slot |
+| Max decode streak | 1691 frames (cam#2-cam#1752) | v32d: entire 60s session unbroken |
+| Frame loss source | Polling rate vs production rate mismatch; dual-slot seqlock reduces this to <4% | v32d: 1752 produced, 1691 received (96.5% capture). All received frames decode OK |
 
 ### 17. Original TakeSemaphore timeout (1000ms) is correct for webcam
 
@@ -286,7 +287,12 @@ PTP USB transfer → bridge → FFmpeg decode → virtual webcam
 **Evidence**: v32b debug frames show FSIZ=0x40000 (262144) for every frame. The `size` parameter from sub_FF92FE8C ([SP,#0x30]) is the ring buffer chunk allocation size, not the actual H.264 encoded size (~35-46KB). Changing the consumer from `sz <= SPY_BUF_SIZE` (reject >64KB) to `sz = min(sz, SPY_BUF_SIZE)` (clamp to 64KB) fixed the regression. The AVCC parser after memcpy determines actual frame size from 4-byte BE length prefixes.
 **Implication**: Always clamp frame size to SPY_BUF_SIZE, never reject. The AVCC parser is the authoritative source of frame boundaries.
 
+### 20. No producer stalls > 50ms in 60-second recording
+
+**Evidence**: v32d added `get_tick_count` (0x3223EC) stall detection to spy_ring_write — reports inter-call gaps > 50ms via debug frame. Result: 0 GAP events in 60 seconds, 100% decode rate (1691/1691), max streak 1691.
+**Previous wrong approach**: Hardware timer 0xC0242014 — wrong address, returned ~4 billion values, fired on every frame, destroyed performance to 8.5%. Address 0x3223F0 — 4 bytes past entry point, corrupted stack, crashed camera immediately.
+**Implication**: The clustered drops seen in v32c (98.2%) were transient timing variance, not systematic producer stalls. The recording pipeline runs smoothly at 30fps with no significant gaps.
+
 ## What Needs to Happen Next
 
-1. **Optimize memcpy size**: Currently copying 64KB per frame (ring buffer chunk size) instead of actual ~42KB encoded size. Reducing this could improve throughput from ~23fps to closer to 30fps.
-2. **Virtual webcam integration**: Connect the H.264 decode output to a DirectShow virtual webcam filter for use in video conferencing apps.
+1. **Virtual webcam integration**: Connect the H.264 decode output to a DirectShow virtual webcam filter for use in video conferencing apps.

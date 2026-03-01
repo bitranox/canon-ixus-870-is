@@ -166,6 +166,26 @@ static void __attribute__((used,noinline)) spy_ring_write(unsigned char *ptr, un
         // it skips the write but still updates the consumed pointer.
         *(volatile unsigned int *)0x89E8 = 0;
 
+        // Stall detection: report inter-call gaps > 50ms via debug frame.
+        // Helps identify what's blocking movie_record_task during clustered drops.
+        {
+            static unsigned int last_tick = 0;
+            long (*fw_get_tick)(void) = (long (*)(void))0x3223EC;
+            unsigned int now = (unsigned int)fw_get_tick();
+            if (last_tick != 0) {
+                unsigned int delta = now - last_tick;
+                // get_tick_count returns milliseconds. Report gaps > 50ms.
+                if (delta > 50) {
+                    spy_debug_reset();
+                    spy_debug_add('G','A','P','!', delta);     // gap in milliseconds
+                    spy_debug_add('N','O','W','T', now);       // current tick (ms)
+                    spy_debug_add('L','S','T','T', last_tick); // last tick (ms)
+                    spy_debug_send();
+                }
+            }
+            last_tick = now;
+        }
+
         // Determine actual H.264 frame size from AVCC length prefix.
         // MovieFrameGetter returns the 256KB chunk size, not encoded size.
         // Parse AVCC: [4-byte BE length][NAL data], possibly 2 NALs (SEI+slice).

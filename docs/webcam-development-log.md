@@ -2842,3 +2842,65 @@ v32b copies 64KB per frame (ring buffer chunk size) but actual H.264 frames aver
 - **118 IDRs** (~2/sec consistent throughout) — all captured
 - Only 29 decode failures scattered across 1571 frames
 - Camera recorded fine, clean shutdown, 0 USB errors
+
+## v32d — Stall Detection Instrumentation (2026-03-01)
+
+### Goal
+Instrument spy_ring_write with timing to find root cause of clustered frame drops (~3 bursts per 60s in v32c).
+
+### Approach: get_tick_count stall detection
+Added timing instrumentation to spy_ring_write using DryOS `get_tick_count` (firmware address 0x3223EC for 101a). Reports inter-call gaps > 50ms via debug frame protocol.
+
+**Previous attempt (broken)**: Hardware timer at 0xC0242014 — wrong address for IXUS 870 IS. Timer values were ~4 billion, causing gap check to fire on EVERY frame. Debug queue flooded, performance destroyed to 8.5% decode. Reverted.
+
+**Also reverted**: Consumed pointer sync (`*(0x8980) = *(0x8984)`) from earlier investigation — didn't fix drops, task_MovWrite queue backup is NOT the cause.
+
+**Fix**: Replaced hardware timer with `get_tick_count` via direct function pointer call `(long (*)(void))0x3223EC`. Returns milliseconds. Threshold: `delta > 50` (50ms).
+
+**Address bug**: Initial attempt used 0x3223F0 (from earlier grep) — this was 4 bytes PAST the function entry point (0x3223EC). Jumping into `add r0, sp, #4` instead of the `push {r0, r1, r2, lr}` preamble corrupted the stack and crashed the camera immediately (recording stopped at 0 seconds).
+
+### 60-Second Test Results
+```
+=== SESSION SUMMARY ===
+  Received: 1691 frames
+  Dropped:  110 (no-frame responses, not decode failures)
+
+=== DEBUG SUMMARY ===
+  PTP calls:    1801 (1691 success, 110 no-frame)
+  Decode:       1691 attempts, 1691 OK (100.0%), 0 FAIL
+  NAL types:    IDR: 121, P-frame: 1570, SEI: 0, other: 0
+  AVCC valid:   1691/1691 (100.0%)
+  Max streak:   1691 (cam#2-cam#1752)
+  USB errors:   send=0 recv=0 timeout=0 io=0
+  Frame sizes:  min=36748 max=63240 avg=40652
+=====================
+  Last cam frame#: 1752
+  Duration: 60.0 seconds
+  Decoded FPS: 28.2
+  Total FPS (incl. drops): 30.0
+  Camera produced: ~1752 frames
+```
+
+### Key findings
+- **100% decode rate** (1691/1691) over 60 seconds — up from 98.2% in v32c
+- **Max streak: 1691** — entire session, zero broken P-frame chains
+- **28.2 FPS decoded** — up from 25.7 in v32c
+- **0 GAP events** — no producer stalls > 50ms detected
+- **121 IDRs** captured (~2/sec, consistent)
+- **61 frames missed** (1752 produced, 1691 received) — normal polling timing, not stalls
+
+### Analysis
+The stall detection found **zero stalls > 50ms**. The v32c drops were likely caused by transient timing variance (USB polling alignment, PTP round-trip jitter) rather than systematic producer stalls. The improved performance in this run (100% vs 98.2%) may be due to:
+1. Scene content (static scene = smaller frames = faster memcpy)
+2. Run-to-run variance in USB timing
+3. Removal of the consumed pointer sync (eliminated unnecessary volatile write per frame)
+
+### Summary: v32 series final results
+
+| Metric | v31c (20s) | v32b | v32c (20s) | v32c (60s) | **v32d (60s)** |
+|--------|-----------|------|------------|------------|----------------|
+| Decode rate | 67.9% | 98.9% | 100% | 98.2% | **100%** |
+| Max streak | 44 | 221 | 458 | 892 | **1691** |
+| Decoded FPS | — | 21.8 | 23.0 | 25.7 | **28.2** |
+| IDRs | 25 | 40 | 40 | 118 | **121** |
+| Camera frames | ~389 | ~462 | ~479 | ~1632 | **~1752** |
