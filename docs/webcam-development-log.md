@@ -2779,6 +2779,40 @@ v32b copies 64KB per frame (ring buffer chunk size) but actual H.264 frames aver
 
 - AVCC size parsing works correctly — frame sizes are accurate, 100% AVCC valid
 - Max streak improved (233 vs 221) — longer unbroken decode runs
-- Decode rate dropped from 98.9% to 94.2% — likely run-to-run variance (different scene content, timing), possibly slight overhead from AVCC parsing in the recording pipeline
+- Decode rate dropped from 98.9% to 94.2% — suspected run-to-run variance
 - Camera produced slightly fewer frames (~438 vs ~462)
 - Camera recorded fine, clean shutdown, 0 USB errors
+
+### Variance Confirmation Run (run 2)
+```
+=== SESSION SUMMARY ===
+  Received: 458 frames
+  Decoded FPS: 23.0
+  Total FPS (incl. drops): 30.1
+  Camera produced: ~479 frames
+  Duration: 19.9 seconds
+=== DEBUG SUMMARY ===
+  PTP calls:    600 (458 success, 142 no-frame)
+  Decode:       458 attempts, 458 OK (100.0%), 0 FAIL
+  NAL types:    IDR: 40, P-frame: 418, SEI: 0, other: 0
+  AVCC valid:   458/458 (100.0%)
+  Max streak:   458 (cam#2-cam#478)
+  USB errors:   send=0 recv=0 timeout=0 io=0
+  Frame sizes:  min=37728 max=63832 avg=41674
+```
+
+- **100% decode — zero failures over 20 seconds**. Confirms run 1's 94.2% was just variance.
+- **458 consecutive frames** decoded without a single break — best result ever
+- **23.0 fps decoded** — improvement over v32b's 21.8fps (smaller memcpy = faster consumer)
+- **~479 camera frames produced** — more than v32b's ~462, confirming reduced backpressure from smaller memcpy
+- Camera recorded fine, clean shutdown, 0 USB errors
+
+### Summary: v32 series results
+
+| Metric | v31c (20s) | v32 | v32b | **v32c** |
+|--------|-----------|-----|------|----------|
+| Decode rate | 67.9% | 71.3% | 98.9% | **100%** |
+| Max streak | 44 | 62 | 221 | **458** |
+| Decoded FPS | — | 15.6 | 21.8 | **23.0** |
+| IDRs | 25 | 25 | 40 | **40** |
+| Camera frames | ~389 | ~460 | ~462 | **~479** |

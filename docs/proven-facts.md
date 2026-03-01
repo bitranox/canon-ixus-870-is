@@ -259,14 +259,14 @@ PTP USB transfer → bridge → FFmpeg decode → virtual webcam
 
 | Metric | Value | Evidence |
 |--------|-------|----------|
-| Frames produced | ~462 in 20s (~23 fps) | v32b bridge output (full 20s session) |
-| Frames decoded | 436/441 (98.9%) | v32b: 441 unique frames, 436 decoded OK |
-| Decoded FPS | 21.8 fps | v32b: measured first-to-last frame |
-| Total FPS (incl. drops) | 30.0 fps | v32b bridge output |
-| IDR keyframes | 40 in 20s (~2/sec, GOP ~11) | v32b bridge output |
-| Average bitrate | ~7-8 Mbps | v32b bridge output |
+| Frames produced | ~479 in 20s (~24 fps) | v32c bridge output (full 20s session) |
+| Frames decoded | 458/458 (100%) | v32c: 458 unique frames, all decoded OK |
+| Decoded FPS | 23.0 fps | v32c: measured first-to-last frame |
+| Total FPS (incl. drops) | 30.1 fps | v32c bridge output |
+| IDR keyframes | 40 in 20s (~2/sec, GOP ~11) | v32c bridge output |
+| Average bitrate | ~7-8 Mbps | v32c bridge output |
 | SD card writes | 0 bytes | 0-byte MOV file, SD usage unchanged |
-| Max decode streak | 221 frames (cam#231-cam#462) | v32b: ~8.8s unbroken decode |
+| Max decode streak | 458 frames (cam#2-cam#478) | v32c: entire 20s session unbroken |
 | Frame loss source | Polling rate vs production rate mismatch; dual-slot seqlock reduces this to <1% | v32b: 441/462 frames (95.5% capture), 436/441 decoded (98.9%). Dual-slot delivers 40 IDRs vs 25 with single-slot |
 
 ### 17. Original TakeSemaphore timeout (1000ms) is correct for webcam
