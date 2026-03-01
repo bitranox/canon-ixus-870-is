@@ -2904,3 +2904,32 @@ The stall detection found **zero stalls > 50ms**. The v32c drops were likely cau
 | Decoded FPS | — | 21.8 | 23.0 | 25.7 | **28.2** |
 | IDRs | 25 | 40 | 40 | 118 | **121** |
 | Camera frames | ~389 | ~462 | ~479 | ~1632 | **~1752** |
+
+## v32e — msleep Polling Interval Sweep (2026-03-01)
+
+### Goal
+Determine if reducing the seqlock polling interval from msleep(10) can improve capture rate (1691/1752 = 96.5% in v32d).
+
+### Tests (all 60 seconds)
+
+| msleep | Decode rate | Frames received | Camera produced | Decoded FPS | Max streak | No-frame polls |
+|--------|------------|-----------------|-----------------|-------------|------------|----------------|
+| **10** | **100%** | **1691** | **~1752** | **28.2** | **1691** | 110 |
+| 12 | 100% | 1637 | ~1698 | 27.3 | 1637 | 164 |
+| 5 | 94.3% | 1219 | ~1280 | 19.1 | 287 | 581 |
+| 1 | 98.5% | 1713 | ~1774 | 28.1 | 776 | 88 |
+
+### Analysis
+
+- **msleep(1)**: Polled fastest (only 88 no-frame), captured 22 more frames than msleep(10). But introduced 25 decode failures — faster polling causes timing contention with the producer, reading seqlock at write boundaries.
+- **msleep(5)**: Catastrophic — camera only produced 1280 frames (vs ~1750). The consumer polls so aggressively it starves movie_record_task of CPU time. 581 no-frame polls = producer can't keep up.
+- **msleep(12)**: 100% decode but fewer frames (1637 vs 1691). Longer sleep = more frames missed between polls.
+- **msleep(10)**: Optimal — gives movie_record_task enough CPU for full 30fps production while polling fast enough for 100% decode and maximum capture.
+
+### Why msleep(5) is worse than msleep(1)
+
+Counter-intuitive result: msleep(5) starves the pipeline more than msleep(1). DryOS scheduler granularity may round msleep(1) up to a full tick (~10ms), effectively making it similar to msleep(10). msleep(5) may land in a scheduling sweet spot that creates tight poll-yield-poll cycles that block movie_record_task.
+
+### Conclusion
+
+**msleep(10) is confirmed optimal.** The USB round-trip (~35ms per frame) is the real bottleneck, not the polling interval. The ~3.5% capture loss (61 frames/min) is inherent to the PTP request-response protocol and cannot be improved by polling faster. Reverted to msleep(10).

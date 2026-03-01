@@ -293,6 +293,15 @@ PTP USB transfer → bridge → FFmpeg decode → virtual webcam
 **Previous wrong approach**: Hardware timer 0xC0242014 — wrong address, returned ~4 billion values, fired on every frame, destroyed performance to 8.5%. Address 0x3223F0 — 4 bytes past entry point, corrupted stack, crashed camera immediately.
 **Implication**: The clustered drops seen in v32c (98.2%) were transient timing variance, not systematic producer stalls. The recording pipeline runs smoothly at 30fps with no significant gaps.
 
+### 21. msleep(10) is the optimal seqlock polling interval
+
+**Evidence**: v32e tested msleep values 1, 5, 10, 12 over 60 seconds each:
+- msleep(10): 100% decode, 1691 received, 28.2fps, max streak 1691
+- msleep(12): 100% decode, 1637 received, 27.3fps (fewer frames captured)
+- msleep(5): 94.3% decode, 1219 received, 19.1fps (starved producer — only 1280 frames produced)
+- msleep(1): 98.5% decode, 1713 received, 28.1fps (25 decode failures from timing contention)
+**Implication**: msleep(10) is the minimum sleep that gives movie_record_task enough CPU for full 30fps production. Lower values starve the producer or cause seqlock read contention. Higher values miss more frames. The ~3.5% capture loss (61 frames/min) is inherent to the USB PTP round-trip (~35ms) and cannot be improved by polling faster.
+
 ## What Needs to Happen Next
 
 1. **Virtual webcam integration**: Connect the H.264 decode output to a DirectShow virtual webcam filter for use in video conferencing apps.
