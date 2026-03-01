@@ -109,22 +109,12 @@ static int __attribute__((used,noinline)) spy_skip_error_path(void)
 // R1 = timeout (ignored when webcam active — we override to 50ms)
 static int __attribute__((used,noinline)) spy_take_sem_short(int sem, int timeout)
 {
-    volatile unsigned int *hdr = (volatile unsigned int *)0x000FF000;
-    // Function pointer to real TakeSemaphore
+    // Pass through to real TakeSemaphore with original timeout (1000ms).
+    // JPCORE hardware encode completes in ~1-5ms, so 1000ms never fires.
+    // Previous 50ms timeout caused fake-success when JPCORE was slow,
+    // corrupting pipeline state and stopping recording after ~2s.
     int (*real_take_sem)(int, int) = (int (*)(int, int))0xFF8274B4;
-
-    if (hdr[0] == 0x52455753) {
-        // Webcam active: use 50ms timeout to minimize SD write blocking
-        int result = real_take_sem(sem, 50);
-        if (result == 9) {
-            // Timeout — return success so recording pipeline continues
-            return 0;
-        }
-        return result;
-    } else {
-        // Normal operation: use original timeout
-        return real_take_sem(sem, timeout);
-    }
+    return real_take_sem(sem, timeout);
 }
 
 // Deliver H.264 frame to webcam module via seqlock protocol.
