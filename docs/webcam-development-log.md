@@ -3067,3 +3067,13 @@ Multi-frame path also optimized: copies directly from camera RAM to multi_frame_
 4. **Yield msleep(10) is mandatory** — not just for producer scheduling, but for ALL DryOS tasks (ISP, display, IS motor)
 5. **AVCC peek before memcpy** — read NAL headers from camera RAM in-place, copy only exact frame bytes
 6. **128KB multi_frame_buf may cause heap starvation** — dark screen appeared with it, never without it (needs confirmation)
+
+### Triple-Slot Re-test with AVCC Peek (DEFINITIVELY FAILED)
+
+Re-tested triple-slot at hdr[7..9] with AVCC peek optimization (copies only 3-50KB per frame instead of up to 64KB). This rules out CPU starvation as the cause of dark screen.
+
+**Test result**: 208 decoded (92.4%), 20.8fps, full 10s, 0 USB errors. Data quality was good. But camera showed dark display and IS motor clicking — identical to previous hdr[7..9] tests.
+
+**Conclusion**: hdr[7..9] hardware interference is definitively confirmed. The dark screen is caused by writing to those specific spy buffer addresses, NOT by CPU starvation from large memcpy. The maximum number of seqlock slots is 2 (hdr[1..6]).
+
+Reverted to dual-slot producer + dual-slot consumer with AVCC peek optimization.

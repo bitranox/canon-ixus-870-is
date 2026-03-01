@@ -212,8 +212,10 @@ static void __attribute__((used,noinline)) spy_ring_write(unsigned char *ptr, un
                 }
             }
 
-            // Dual-slot seqlock at hdr[1..6] (proven stable: v32d, 60s, 100%).
-            // A=hdr[1..3], B=hdr[4..6]. Branchless pointer arithmetic.
+            // Dual-slot seqlock at hdr[1..6] (proven stable).
+            // A=hdr[1..3], B=hdr[4..6]. hdr[7..9] MUST NOT be written —
+            // causes dark display + IS motor clicking (confirmed with AVCC
+            // peek: reduced CPU usage rules out starvation as cause).
             {
                 static int slot = 0;
                 volatile unsigned int *s = hdr + 1 + slot * 3;

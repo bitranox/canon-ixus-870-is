@@ -306,14 +306,15 @@ PTP USB transfer → bridge → FFmpeg decode → virtual webcam
 - msleep(1): 98.5% decode, 1713 received, 28.1fps (25 decode failures from timing contention)
 **Implication**: msleep(10) is the minimum sleep that gives movie_record_task enough CPU for full 30fps production. Lower values starve the producer or cause seqlock read contention. Higher values miss more frames. The ~3.5% capture loss (61 frames/min) is inherent to the USB PTP round-trip (~35ms) and cannot be improved by polling faster.
 
-### 22. hdr[7..9] MUST NOT be written — causes hardware interference
+### 22. hdr[7..9] MUST NOT be written — causes hardware interference (DEFINITIVELY CONFIRMED)
 
 **Evidence**: Multiple approaches tested in v32f session 2:
 - Every-frame write to hdr[7..9] (triple-slot seqlock): dark display, IS motor clicking, garbage data
 - Write-once hdr[7] (BSS address publish): same dark display, IS motor clicking
 - BSS `static unsigned int slot_data[9]` + hdr[7] pointer: camera crashes at 0s
+- **Triple-slot + AVCC peek** (minimal CPU: copies only 3-50KB per frame instead of 64KB): still dark display + IS motor clicking. This rules out CPU starvation as the cause — it IS the addresses themselves.
 
-**Implication**: spy buffer offsets 7-9 at 0xFF000 overlap with something hardware-sensitive. Only hdr[1..6] (dual-slot) is safe for seqlock data. All triple-slot approaches have been exhausted and failed.
+**Implication**: spy buffer offsets 7-9 at 0xFF000 overlap with something hardware-sensitive. Only hdr[1..6] (dual-slot) is safe for seqlock data. All triple-slot approaches have been exhausted and failed. The maximum number of seqlock slots is 2.
 
 ### 23. Yield msleep(10) after detecting new frame is mandatory
 

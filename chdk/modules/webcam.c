@@ -87,13 +87,13 @@ static int idr_injected = 0;
 // spy[4]  = slot_b_ptr (slot B)
 // spy[5]  = slot_b_sz  (slot B)
 // spy[6]  = slot_b_seq (slot B)
+// spy[7..9] = RESERVED — DO NOT WRITE (causes dark display + IS motor clicking)
 // spy[12] = dbg_wr     (debug queue write index)
 // spy[13] = dbg_rd     (debug queue read index)
 //
-// Dual-slot seqlock (proven stable: v32d, 60s, 100% decode, 28.2fps).
-// Consumer collects all unseen frames, sorts oldest-first, packs into
-// multi_frame_buf for batch PTP response. Single-frame fallback if
-// multi_frame_buf allocation failed.
+// Dual-slot seqlock with AVCC peek optimization.
+// Consumer peeks AVCC headers from camera RAM to determine exact frame size,
+// then memcpy only that many bytes. Multi-frame batching when both slots new.
 
 // Dual-slot seqlock tracking (module-level for persistence across capture calls)
 static unsigned int last_seq_a = 0;    // last seen slot A sequence
@@ -260,11 +260,10 @@ static int capture_frame_h264(void)
         }
     }
 
-    // Dual-slot seqlock polling with multi-frame batching.
-    // Slots A=hdr[1..3], B=hdr[4..6] (proven stable at hdr[1..6]).
-    // Collect all unseen frames, sort oldest-first by seq, pack into
-    // multi_frame_buf for single PTP response. Falls back to single-frame
-    // (newest unseen) if multi_frame_buf allocation failed.
+    // Dual-slot seqlock polling with AVCC peek + multi-frame batching.
+    // Slots A=hdr[1..3], B=hdr[4..6]. hdr[7..9] MUST NOT be read/written.
+    // Peek AVCC headers from camera RAM to determine exact frame size,
+    // then memcpy only that many bytes.
     {
         int polls;
 
@@ -279,13 +278,11 @@ static int capture_frame_h264(void)
                 continue;
             }
 
-            /* Yield CPU so movie_record_task and ISP tasks stay scheduled.
-             * Without this, the PTP task starves DryOS cooperative tasks,
-             * causing dark display and IS motor clicking. */
+            /* Yield CPU so movie_record_task and ISP tasks stay scheduled. */
             msleep(10);
 
             if (multi_frame_buf && new_a && new_b) {
-                /* Both slots have new data — pack oldest-first. */
+                /* Both slots new — pack oldest-first into multi_frame_buf */
                 struct { unsigned int seq; int idx; } pending[2];
                 int nframes = 0;
                 unsigned int out_pos = 2;  /* skip u16 count header */
@@ -331,14 +328,14 @@ static int capture_frame_h264(void)
                         if (!have_vcl || total == 0 || total > sz) goto mark_seen;
                     }
 
-                    /* Copy only the exact frame bytes, then verify seqlock */
+                    /* Copy exact frame bytes, verify seqlock */
                     if (out_pos + 4 + total <= multi_buf_size) {
                         multi_frame_buf[out_pos]   = total & 0xFF;
                         multi_frame_buf[out_pos+1] = (total >> 8) & 0xFF;
                         multi_frame_buf[out_pos+2] = (total >> 16) & 0xFF;
                         multi_frame_buf[out_pos+3] = (total >> 24) & 0xFF;
                         memcpy(multi_frame_buf + out_pos + 4, src, total);
-                        if (s[2] != pending[i].seq) goto mark_seen;  /* torn write */
+                        if (s[2] != pending[i].seq) goto mark_seen;
                         out_pos += 4 + total;
                         nframes++;
                     }
@@ -351,7 +348,6 @@ static int capture_frame_h264(void)
                 if (nframes == 0) return 0;
 
                 if (nframes == 1) {
-                    /* Single frame packed: return as H264 (skip count+size header) */
                     hw_jpeg_data = multi_frame_buf + 6;
                     hw_jpeg_size = out_pos - 6;
                     frame_width = 640;
@@ -370,9 +366,8 @@ static int capture_frame_h264(void)
                 frame_format = WEBCAM_FMT_H264_MULTI;
                 return (int)out_pos;
             } else {
-                /* Single new slot, or no multi_frame_buf: return newest unseen.
-                 * Peek AVCC headers directly from camera RAM to determine exact
-                 * frame size BEFORE memcpy — copy only what's needed. */
+                /* Single new slot, or no multi_frame_buf: return newest.
+                 * Peek AVCC from camera RAM, copy only exact bytes. */
                 volatile unsigned int *s;
                 unsigned int best_seq = 0;
                 int best_idx = -1;
@@ -395,8 +390,7 @@ static int capture_frame_h264(void)
                 if (!src || sz == 0) return 0;
                 if (sz > SPY_BUF_SIZE) sz = SPY_BUF_SIZE;
 
-                /* Peek AVCC length headers from camera RAM to compute exact
-                 * copy size.  Walk NALs: [4-byte BE len][NAL data]... */
+                /* Peek AVCC from camera RAM */
                 {
                     unsigned int pos = 0, total = 0;
                     int nal_count = 0, have_vcl = 0;
@@ -421,7 +415,7 @@ static int capture_frame_h264(void)
                 }
 
                 memcpy(frame_data_buf, src, copy_sz);
-                if (s[2] != best_seq) return 0;  /* torn write */
+                if (s[2] != best_seq) return 0;
 
                 hw_jpeg_data = frame_data_buf;
                 hw_jpeg_size = copy_sz;
