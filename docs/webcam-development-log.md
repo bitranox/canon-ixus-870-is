@@ -3185,3 +3185,84 @@ MULTI batch=2 appeared 2 times in 10s test (3 times in 60s). Low batch rate is e
 2. **Multi-frame batching works**: Bridge correctly unpacks H264_MULTI format, decodes both frames
 3. **Performance maintained**: 100% decode, 30.0fps, 0 errors — matches v32g baseline
 4. **Batch frequency is low**: ~3 batches per 60s. Frame loss from RTT spikes was already rare with dual-slot seqlock; batching provides marginal improvement as insurance
+
+## USB Subsystem Reverse Engineering — UVC Webcam Feasibility (2026-03-04)
+
+### Goal
+
+Investigate whether the IXUS 870 IS USB hardware can support native UVC (USB Video Class) mode, eliminating the PC bridge requirement. The camera would appear as a standard webcam to the OS with zero software installation.
+
+### Approach
+
+Created 4 Ghidra headless scripts to decompile the USB subsystem from different angles:
+
+| Script | Functions | Focus |
+|--------|-----------|-------|
+| DecompileUSBProtocol.java | 80 | ChangeUSBProtocol, add_ptp_handler, task_PTPSessionTASK |
+| DecompileUSBDriver.java | 80 | DiUSB20 driver layer via string xrefs (DM, HAL, DMA, CP, DP, Config) |
+| DecompileUSBDescriptors.java | 4 | Raw USB descriptor extraction + parsing from ROM |
+| DecompileUSBTransport.java | 108 | ClassRequest dispatcher, AsyncWriteUSBDataPipeMulti, BulkTrns |
+| **Total** | **272** | **0 decompilation failures** |
+
+### Findings
+
+#### USB Controller: Canon DiUSB20 (proprietary)
+
+The USB controller is Canon's proprietary "Diana USB 2.0" IP core — NOT a standard MUSB (Mentor) or DWC OTG (Synopsys) core. Module strings: DiUSB20DM.c (Device Manager), DiUSB20Hal.c (HAL), DiUSB20HDMACHal.c (DMA HAL), DiUSB20CP.c (Control Pipe), DiUSB20DP.c (Data Pipe), DianaUSBConfig.c (Configuration).
+
+USB registers at `0xC0223000` base. PHY uses ULPI-style register access (bit 25 busy flag, 8-bit addr/data). Per-endpoint control registers at 8-byte stride from `+0x100`.
+
+#### Hardware Endpoints: 4 total (EP0 + EP1-EP3)
+
+- EP0: Control (mandatory)
+- EP1: IN Bulk (512B HS / 64B FS)
+- EP2: OUT Bulk (512B HS / 64B FS)
+- EP3: IN Interrupt (8B)
+
+All 3 data endpoints are committed to PTP. The driver code uses a 3-way switch on endpoint numbers 1/2/3 with asserts for any other value.
+
+#### No Isochronous Support
+
+Zero isochronous references in the entire firmware:
+- No ISO endpoint type configuration (type bits never set to 01)
+- No double-buffering/ping-pong for ISO streaming
+- No ISO-specific DMA modes
+- No "Iso" or "isochronous" strings anywhere
+- Firmware only knows types: 1=Bulk IN, 2=Bulk OUT, 3=Interrupt IN
+
+#### Descriptors in ROM
+
+USB descriptors at `0xFFB58E80` in flash ROM:
+- VID:PID = 04A9:3085 (Canon Inc.), USB 2.0
+- Device class 0x00 (per-interface), Interface class 0x06 (Still Image / PTP)
+- Two variants: Full-Speed and High-Speed (same interface, different packet sizes)
+- NOT copied to RAM — served directly from ROM
+- No runtime modification possible without ROM patching
+
+#### No SoftConnect/SoftDisconnect API
+
+Strings "SoftConnect", "USBReset", "BusReset", "SetInterface", "GetInterface" — **NOT FOUND** in firmware. Cannot dynamically reconfigure USB device class or trigger re-enumeration with new descriptors.
+
+#### Class Request Dispatcher Hardcoded to PTP
+
+The transport controller (TrnsCtrlTask) dispatches class requests via a computed table, but the bRequest range check is hardcoded to 100-103 (PTP-specific). UVC class requests (SET_CUR=0x01, GET_CUR=0x81) are outside this range.
+
+#### Protocol Switching Mechanism
+
+ChangeUSBProtocol (0xFF9F02E4) does teardown + 100-500ms sleep + reinit. The teardown stops event handlers, kills transport tasks, frees buffers, releases USB interrupt handler. Reinit creates new tasks and allocates buffers. But the actual register-level disconnect happens in a deeper layer. No 0xC022xxxx register writes in the 80 decompiled functions.
+
+#### Single-Buffer DMA
+
+DiUSB20HDMACHal provides simple single-buffer DMA: one address register, one size register, one enable bit. No scatter-gather, no linked-list DMA, no multi-buffer ping-pong.
+
+### Feasibility Assessment
+
+| Approach | Feasible? | Reason |
+|----------|-----------|--------|
+| Full UVC (isochronous) | **No** | Zero ISO support in firmware, no ISO endpoint type in driver, single-buffer DMA incompatible with ISO timing |
+| Bulk-only UVC | **Theoretically possible, impractical** | Requires ROM patching descriptors + class request dispatcher, repurposing endpoints, implementing UVC class handling from scratch, no dynamic mode switching |
+| Current PTP tunnel (v32h) | **Yes — already working** | 100% decode, 30fps, 60s stable. Correct architecture for this hardware |
+
+### Conclusion
+
+The current PTP bridge approach is the right solution for this hardware. The USB subsystem has exactly 3 data endpoints (all committed to PTP), no isochronous support, descriptors in ROM with no RAM copy, and no SoftConnect API for runtime reconfiguration. Native UVC would require extreme reverse engineering of Canon's undocumented custom USB core with no firmware reference implementation — far more complex than the working PTP bridge which already achieves theoretical maximum performance.

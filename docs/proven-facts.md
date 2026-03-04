@@ -1,6 +1,6 @@
 # Proven Facts — Canon IXUS 870 IS Webcam Project
 
-Last updated: 2026-03-01
+Last updated: 2026-03-04
 
 This document contains ONLY verified, tested facts. No speculation, no history.
 Each fact includes the evidence that proved it.
@@ -346,6 +346,38 @@ With yield restored: stable operation, correct frame sizes.
 **Cause**: DryOS heap exhaustion. 64KB (frame_data_buf) + 128KB (multi_frame_buf) = 192KB from DryOS heap. The camera's ISP, display controller, and IS motor controller share the same heap. 128KB extra allocation starves these subsystems.
 
 **Implication**: Maximum safe malloc from webcam module is between 130KB and 192KB. 130KB single allocation is proven safe (v32h: 60s, no dark screen). 192KB total (64+128) causes dark screen. Multi-frame batching works by using a single 130KB buffer (2×65KB max frame size).
+
+## USB Subsystem (DiUSB20)
+
+| Fact | Value | Evidence |
+|------|-------|----------|
+| USB controller | Canon DiUSB20 ("Diana USB 2.0") — proprietary, not MUSB/DWC OTG | Module strings: DiUSB20DM.c, DiUSB20Hal.c, DiUSB20HDMACHal.c, DiUSB20CP.c, DiUSB20DP.c, DianaUSBConfig.c |
+| USB register base | 0xC0223000 | Global scan + DAT_ff83b670 base pointer |
+| Hardware endpoints | 4 total: EP0 (control) + EP1/EP2/EP3 (data) | 3-way endpoint switch in driver code, register stride 8 bytes at +0x100 |
+| EP1 | IN Bulk, 512B (HS) / 64B (FS) | ROM descriptor at 0xFFB58E80 |
+| EP2 | OUT Bulk, 512B (HS) / 64B (FS) | ROM descriptor at 0xFFB58E80 |
+| EP3 | IN Interrupt, 8B | ROM descriptor at 0xFFB58E80 |
+| VID:PID | 04A9:3085 (Canon Inc.) | ROM device descriptor |
+| USB version | 2.0 (HS) / 1.10 (FS qualifier) | ROM descriptor |
+| Device class | 0x00 (per-interface) | ROM descriptor |
+| Interface class | 0x06 (Still Image / PTP) | ROM descriptor |
+| Isochronous support | None — zero references in entire firmware | 272-function decompilation, no ISO type/string/DMA mode |
+| Descriptors location | ROM at 0xFFB58E80+ (not copied to RAM) | Ghidra address analysis, no memcpy to RAM buffer |
+| SoftConnect API | Does not exist | Strings "SoftConnect", "USBReset", "BusReset" absent from firmware |
+| Class request range | bRequest 100-103 only (PTP-specific) | TrnsCtrlTask case 4 dispatcher, hardcoded range check |
+| DMA type | Single-buffer, no scatter-gather | DiUSB20HDMACHal analysis: one addr, one size, one enable |
+| PHY interface | ULPI-style register access (bit 25 busy flag) | DiUSB20Hal PHY read/write functions |
+
+### 26. Native UVC webcam is infeasible on this hardware
+
+**Evidence**: Comprehensive USB subsystem decompilation (272 functions, 0 failures across 4 Ghidra scripts):
+- Only 3 data endpoints, all committed to PTP (no spare for UVC video streaming)
+- Zero isochronous transfer support (no ISO endpoint type, no ISO DMA mode, no ISO strings)
+- USB descriptors in ROM — cannot be modified at runtime
+- No SoftConnect/SoftDisconnect API — cannot trigger re-enumeration with new descriptors
+- Class request dispatcher hardcoded to bRequest 100-103 (PTP), UVC needs 0x01/0x81
+
+**Implication**: The current PTP bridge approach (custom opcode 0x9999, bulk transfer) is the correct and only practical architecture for webcam streaming on this camera. Native UVC would require ROM patching, custom ISO driver for undocumented hardware, and runtime endpoint reconfiguration — all without any firmware reference implementation.
 
 ## What Needs to Happen Next
 
